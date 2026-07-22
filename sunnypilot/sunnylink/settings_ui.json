@@ -214,26 +214,6 @@
                   ]
                 },
                 {
-                  "key": "RivianMadsReversePauseSpeed",
-                  "widget": "option",
-                  "title": "Reverse MADS Pause Speed",
-                  "description": "Pause MADS for Reverse only at or below this speed. A Reverse request above this speed will not interrupt active MADS.",
-                  "min": 5,
-                  "max": 20,
-                  "step": 1,
-                  "unit": {
-                    "metric": "km/h",
-                    "imperial": "mph"
-                  },
-                  "visibility": [
-                    {
-                      "type": "capability",
-                      "field": "brand",
-                      "equals": "rivian"
-                    }
-                  ]
-                },
-                {
                   "key": "RivianMadsResumeDelay",
                   "widget": "option",
                   "title": "MADS Auto-Resume Warning",
