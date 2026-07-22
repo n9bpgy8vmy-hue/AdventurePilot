@@ -114,9 +114,13 @@ def test_each_configurable_delay_resumes_once(mocker):
     mads.rivian_reverse_resume_pending = True
     mads.rivian_mads_resume_delay = delay
 
-    calls = round(delay / DT_CTRL)
-    for _ in range(calls - 1):
-      assert not mads.should_silent_lkas_enable(car_state(21))
-    assert mads.should_silent_lkas_enable(car_state(21))
+    assert not mads.should_silent_lkas_enable(car_state(21))
     warning_event = getattr(custom.OnroadEventSP.EventName, f"rivianMadsResumeWarning{delay}Sec")
     assert mads.events_sp.has(warning_event)
+
+    # Floating-point subtraction may require one additional 10 ms control tick.
+    for _ in range(round(delay / DT_CTRL) + 1):
+      if mads.should_silent_lkas_enable(car_state(21)):
+        break
+    else:
+      raise AssertionError(f"MADS did not resume after the {delay}-second warning")
