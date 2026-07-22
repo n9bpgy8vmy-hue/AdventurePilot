@@ -197,7 +197,7 @@
                   "key": "RivianMadsAutoResumeSpeed",
                   "widget": "option",
                   "title": "Minimum MADS Auto-Resume Speed",
-                  "description": "After Reverse or another pause, automatically resume MADS only in Drive and above this speed.",
+                  "description": "After leaving Reverse, automatically resume MADS only in Drive and above this speed. This does not pause or disengage active MADS.",
                   "min": 5,
                   "max": 45,
                   "step": 5,

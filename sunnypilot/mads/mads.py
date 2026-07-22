@@ -59,6 +59,7 @@ class ModularAssistiveDrivingSystem:
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
     self.is_metric = self.params.get_bool("IsMetric")
     self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
+    self.rivian_reverse_resume_pending = False
 
   def read_params(self):
     self.main_enabled_toggle = self.params.get_bool("MadsMainCruiseAllowed")
@@ -80,11 +81,10 @@ class ModularAssistiveDrivingSystem:
     if self.events_sp.contains_in_list(GEARS_ALLOW_PAUSED_SILENT):
       return False
 
-    # Rivian enters the paused state while Reverse is selected. Do not let the
-    # generic silent-resume path reactivate lateral control at parking-lot
-    # speeds when Reverse is released. Resume automatically only in Drive and
-    # above the minimum speed selected in Sunnylink MADS settings.
-    if self.CP.brand == "rivian":
+    # After a Rivian Reverse-triggered pause, wait to resume lateral control
+    # until Drive is selected and the Sunnylink minimum speed is exceeded.
+    # Other pause/resume paths are intentionally unaffected by this setting.
+    if self.CP.brand == "rivian" and self.rivian_reverse_resume_pending:
       if CS.gearShifter != GearShifter.drive:
         return False
       speed_factor = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
@@ -142,9 +142,13 @@ class ModularAssistiveDrivingSystem:
           self.replace_event(EventName.seatbeltNotLatched, EventNameSP.silentSeatbeltNotLatched)
           self.transition_paused_state()
       if self.events.has(EventName.wrongGear) and (CS.vEgo < 2.5 or CS.gearShifter == GearShifter.reverse):
+        if self.CP.brand == "rivian" and CS.gearShifter == GearShifter.reverse:
+          self.rivian_reverse_resume_pending = True
         self.replace_event(EventName.wrongGear, EventNameSP.silentWrongGear)
         self.transition_paused_state()
       if self.events.has(EventName.reverseGear):
+        if self.CP.brand == "rivian":
+          self.rivian_reverse_resume_pending = True
         self.replace_event(EventName.reverseGear, EventNameSP.silentReverseGear)
         self.transition_paused_state()
       if self.events.has(EventName.brakeHold):
@@ -233,6 +237,8 @@ class ModularAssistiveDrivingSystem:
 
     if not self.CP.passive and self.selfdrive.initialized:
       self.enabled, self.active = self.state_machine.update()
+      if self.CP.brand == "rivian" and self.state_machine.state != State.paused:
+        self.rivian_reverse_resume_pending = False
 
     # Copy of previous SelfdriveD states for MADS events handling
     self.selfdrive.enabled_prev = self.selfdrive.enabled
