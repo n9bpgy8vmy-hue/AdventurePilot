@@ -24,6 +24,13 @@ SafetyModel = structs.CarParams.SafetyModel
 
 SET_SPEED_BUTTONS = (ButtonType.accelCruise, ButtonType.resumeCruise, ButtonType.decelCruise, ButtonType.setCruise)
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
+RIVIAN_MADS_RESUME_WARNING_EVENTS = {
+  1: EventNameSP.rivianMadsResumeWarning1Sec,
+  2: EventNameSP.rivianMadsResumeWarning2Sec,
+  3: EventNameSP.rivianMadsResumeWarning3Sec,
+  4: EventNameSP.rivianMadsResumeWarning4Sec,
+  5: EventNameSP.rivianMadsResumeWarning5Sec,
+}
 
 
 class ModularAssistiveDrivingSystem:
@@ -100,8 +107,9 @@ class ModularAssistiveDrivingSystem:
         return False
 
       if self.rivian_mads_resume_countdown <= 0.0:
-        self.rivian_mads_resume_countdown = float(self.rivian_mads_resume_delay)
-        self.events_sp.add(EventNameSP.e2eChime)
+        delay = max(1, min(5, self.rivian_mads_resume_delay))
+        self.rivian_mads_resume_countdown = float(delay)
+        self.events_sp.add(RIVIAN_MADS_RESUME_WARNING_EVENTS[delay])
 
       self.rivian_mads_resume_countdown = max(0.0, self.rivian_mads_resume_countdown - DT_CTRL)
       if self.rivian_mads_resume_countdown > 0.0:

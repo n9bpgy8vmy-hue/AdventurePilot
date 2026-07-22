@@ -82,11 +82,11 @@ def test_metric_selection_uses_kph(mocker):
   assert mads.should_silent_lkas_enable(car_state(12.5))
 
 
-def test_warning_chime_starts_configured_countdown(mocker):
+def test_warning_alert_starts_configured_countdown(mocker):
   mads = make_mads(mocker)
   mads.rivian_reverse_resume_pending = True
   assert not mads.should_silent_lkas_enable(car_state(21))
-  assert mads.events_sp.contains(custom.OnroadEventSP.EventName.e2eChime)
+  assert mads.events_sp.contains(custom.OnroadEventSP.EventName.rivianMadsResumeWarning3Sec)
   assert mads.rivian_mads_resume_countdown == 3 - DT_CTRL
 
 
@@ -97,3 +97,26 @@ def test_countdown_resets_if_speed_drops(mocker):
   assert mads.rivian_mads_resume_countdown > 0
   assert not mads.should_silent_lkas_enable(car_state(20))
   assert mads.rivian_mads_resume_countdown == 0
+
+
+def test_countdown_resets_if_shifted_back_to_reverse(mocker):
+  mads = make_mads(mocker)
+  mads.rivian_reverse_resume_pending = True
+  assert not mads.should_silent_lkas_enable(car_state(21))
+  assert mads.rivian_mads_resume_countdown > 0
+  assert not mads.should_silent_lkas_enable(car_state(0, structs.CarState.GearShifter.reverse))
+  assert mads.rivian_mads_resume_countdown == 0
+
+
+def test_each_configurable_delay_resumes_once(mocker):
+  for delay in range(1, 6):
+    mads = make_mads(mocker)
+    mads.rivian_reverse_resume_pending = True
+    mads.rivian_mads_resume_delay = delay
+
+    calls = round(delay / DT_CTRL)
+    for _ in range(calls - 1):
+      assert not mads.should_silent_lkas_enable(car_state(21))
+    assert mads.should_silent_lkas_enable(car_state(21))
+    warning_event = getattr(custom.OnroadEventSP.EventName, f"rivianMadsResumeWarning{delay}Sec")
+    assert mads.events_sp.contains(warning_event)

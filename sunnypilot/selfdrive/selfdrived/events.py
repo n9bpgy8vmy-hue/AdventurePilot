@@ -72,6 +72,14 @@ def speed_limit_pre_active_alert(CP: car.CarParams, CS: car.CarState, sm: messag
     Priority.LOW, VisualAlert.none, AudibleAlertSP.promptSingleLow, .1)
 
 
+def rivian_mads_resume_warning_alert(delay: int) -> Alert:
+  return Alert(
+    "MADS will resume",
+    f"Lane centering resumes in {delay} second{'s' if delay != 1 else ''}",
+    AlertStatus.normal, AlertSize.mid,
+    Priority.MID, VisualAlert.none, AudibleAlert.prompt, float(delay))
+
+
 class EventsSP(EventsBase):
   def __init__(self):
     super().__init__()
@@ -242,5 +250,21 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "",
       AlertStatus.normal, AlertSize.none,
       Priority.MID, VisualAlert.none, AudibleAlert.prompt, 3.),
+  },
+
+  EventNameSP.rivianMadsResumeWarning1Sec: {
+    ET.PERMANENT: rivian_mads_resume_warning_alert(1),
+  },
+  EventNameSP.rivianMadsResumeWarning2Sec: {
+    ET.PERMANENT: rivian_mads_resume_warning_alert(2),
+  },
+  EventNameSP.rivianMadsResumeWarning3Sec: {
+    ET.PERMANENT: rivian_mads_resume_warning_alert(3),
+  },
+  EventNameSP.rivianMadsResumeWarning4Sec: {
+    ET.PERMANENT: rivian_mads_resume_warning_alert(4),
+  },
+  EventNameSP.rivianMadsResumeWarning5Sec: {
+    ET.PERMANENT: rivian_mads_resume_warning_alert(5),
   },
 }

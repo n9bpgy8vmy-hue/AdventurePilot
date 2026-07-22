@@ -364,6 +364,11 @@ struct OnroadEventSP @0xda96579883444c35 {
     speedLimitChanged @21;
     speedLimitPending @22;
     e2eChime @23;
+    rivianMadsResumeWarning1Sec @24;
+    rivianMadsResumeWarning2Sec @25;
+    rivianMadsResumeWarning3Sec @26;
+    rivianMadsResumeWarning4Sec @27;
+    rivianMadsResumeWarning5Sec @28;
   }
 }
 
