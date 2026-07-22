@@ -126,6 +126,24 @@ def test_each_configurable_delay_resumes_once(mocker):
       raise AssertionError(f"MADS did not resume after the {delay}-second warning")
 
 
+def test_warning_counts_down_each_second(mocker):
+  mads = make_mads(mocker)
+  mads.rivian_reverse_resume_pending = True
+  seen_seconds = []
+
+  for _ in range(round(3 / DT_CTRL) + 2):
+    mads.events_sp.clear()
+    resumed = mads.should_silent_lkas_enable(car_state(21))
+    for second in (3, 2, 1):
+      event = getattr(custom.OnroadEventSP.EventName, f"rivianMadsResumeWarning{second}Sec")
+      if mads.events_sp.has(event):
+        seen_seconds.append(second)
+    if resumed:
+      break
+
+  assert seen_seconds == [3, 2, 1]
+
+
 def test_logs_reverse_resume_lifecycle(mocker):
   log_event = mocker.patch("openpilot.sunnypilot.mads.mads.cloudlog.event")
   mads = make_mads(mocker)
@@ -174,3 +192,17 @@ def test_feature_logging_defaults_to_off(mocker):
 
   assert not mads.should_silent_lkas_enable(car_state(21))
   log_event.assert_not_called()
+
+
+def test_invalid_config_error_is_always_logged_once(mocker):
+  log_event = mocker.patch("openpilot.sunnypilot.mads.mads.cloudlog.event")
+  mads = make_mads(mocker)
+  mads.rivian_mads_resume_delay = 9
+
+  mads.validate_rivian_mads_config()
+  mads.validate_rivian_mads_config()
+
+  log_event.assert_called_once()
+  assert log_event.call_args.args[0] == "rivianpilot feature error"
+  assert log_event.call_args.kwargs["feature"] == "mads_reverse_resume"
+  assert log_event.call_args.kwargs["errors"] == ["resume_delay_out_of_range"]

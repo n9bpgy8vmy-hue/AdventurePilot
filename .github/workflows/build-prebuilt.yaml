@@ -1,7 +1,8 @@
 name: Build Prebuilt
 
 # Branch-generic prebuilt builder for the comma 3X self-hosted runner (label: tici).
-# Lives ON each *-src source branch (rel-src, stg-src), NOT on dev or ap-dev. Fires on push to its
+# Lives ON each source branch and publishes its matching prebuilt branch. RivianPilot development
+# uses rpdev -> rpdev-prebuilt.
 # branch and publishes the de-suffixed prebuilt branch in THIS repo:
 #   push to rel-src -> builds rel-src -> publishes rel
 #   push to stg-src -> builds stg-src -> publishes stg
@@ -19,7 +20,7 @@ name: Build Prebuilt
 
 on:
   push:
-    branches: [ rel-src, stg-src, apdev ]
+    branches: [ rel-src, stg-src, apdev, rpdev ]
   workflow_dispatch:
     inputs:
       source_branch:
@@ -121,6 +122,12 @@ jobs:
           cd $BUILD_DIR
           PARAMS_ROOT=${{ github.workspace }}/.test_params PYTHONPATH=$BUILD_DIR \
             python -m pytest -q sunnypilot/mads/tests/test_rivian_mads_resume.py
+
+      - name: Validate RivianPilot Sunnylink settings
+        run: |
+          cd $BUILD_DIR
+          python sunnypilot/sunnylink/tools/compile_settings_ui.py --check
+          python sunnypilot/sunnylink/tools/validate_settings_ui.py sunnypilot/sunnylink/settings_ui.json
 
       - name: Prepare Output
         run: |

@@ -5,6 +5,8 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+import math
+
 from cereal import log, custom
 
 from opendbc.car import structs
@@ -72,6 +74,33 @@ class ModularAssistiveDrivingSystem:
     self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
     self.rivian_reverse_resume_pending = False
     self.rivian_mads_resume_countdown = 0.0
+    self.rivian_mads_last_warning_second = 0
+    self.rivian_mads_countdown_ticks = 0
+    self.rivian_mads_countdown_delay = 0
+    self.rivian_last_config_error = None
+    self.validate_rivian_mads_config()
+
+  def validate_rivian_mads_config(self) -> None:
+    if self.CP.brand != "rivian":
+      return
+
+    errors = []
+    if not 5 <= self.rivian_mads_auto_resume_speed <= 45:
+      errors.append("resume_speed_out_of_range")
+    if not 1 <= self.rivian_mads_resume_delay <= 5:
+      errors.append("resume_delay_out_of_range")
+
+    error_signature = tuple(errors) or None
+    if error_signature is not None and error_signature != self.rivian_last_config_error:
+      # Safety/configuration errors are always recorded, independent of the optional diagnostics toggle.
+      cloudlog.event(
+        "rivianpilot feature error",
+        feature="mads_reverse_resume",
+        errors=errors,
+        resume_speed=self.rivian_mads_auto_resume_speed,
+        resume_delay=self.rivian_mads_resume_delay,
+      )
+    self.rivian_last_config_error = error_signature
 
   def log_rivian_mads_resume(self, action: str, CS: structs.CarState, **kwargs) -> None:
     if not self.rivianpilot_feature_logging:
@@ -100,8 +129,12 @@ class ModularAssistiveDrivingSystem:
         CS,
         reason=reason,
         remaining_seconds=round(self.rivian_mads_resume_countdown, 2),
+        elapsed_control_seconds=round(self.rivian_mads_countdown_ticks * DT_CTRL, 2),
       )
     self.rivian_mads_resume_countdown = 0.0
+    self.rivian_mads_last_warning_second = 0
+    self.rivian_mads_countdown_ticks = 0
+    self.rivian_mads_countdown_delay = 0
 
   def read_params(self):
     self.main_enabled_toggle = self.params.get_bool("MadsMainCruiseAllowed")
@@ -110,6 +143,7 @@ class ModularAssistiveDrivingSystem:
     self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
     self.rivian_mads_resume_delay = self.params.get("RivianMadsResumeDelay", return_default=True)
     self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
+    self.validate_rivian_mads_config()
 
   def pedal_pressed_non_gas_pressed(self, CS: structs.CarState) -> bool:
     # ignore `pedalPressed` events caused by gas presses
@@ -142,14 +176,28 @@ class ModularAssistiveDrivingSystem:
       if self.rivian_mads_resume_countdown <= 0.0:
         delay = max(1, min(5, int(self.rivian_mads_resume_delay)))
         self.rivian_mads_resume_countdown = float(delay)
+        self.rivian_mads_last_warning_second = delay
+        self.rivian_mads_countdown_ticks = 0
+        self.rivian_mads_countdown_delay = delay
         self.log_rivian_mads_resume("countdown_started", CS, delay_seconds=delay)
         self.events_sp.add(RIVIAN_MADS_RESUME_WARNING_EVENTS[delay])
 
       self.rivian_mads_resume_countdown = max(0.0, self.rivian_mads_resume_countdown - DT_CTRL)
+      self.rivian_mads_countdown_ticks += 1
       if self.rivian_mads_resume_countdown > 0.0:
+        warning_second = math.ceil(self.rivian_mads_resume_countdown)
+        if warning_second < self.rivian_mads_last_warning_second:
+          self.rivian_mads_last_warning_second = warning_second
+          self.events_sp.add(RIVIAN_MADS_RESUME_WARNING_EVENTS[warning_second])
+          self.log_rivian_mads_resume("countdown_tick", CS, remaining_seconds=warning_second)
         return False
 
-      self.log_rivian_mads_resume("resumed", CS)
+      self.log_rivian_mads_resume(
+        "resumed",
+        CS,
+        elapsed_control_seconds=round(self.rivian_mads_countdown_ticks * DT_CTRL, 2),
+        expected_delay_seconds=self.rivian_mads_countdown_delay,
+      )
 
     return True
 
@@ -301,6 +349,9 @@ class ModularAssistiveDrivingSystem:
       if self.CP.brand == "rivian" and self.state_machine.state != State.paused:
         self.rivian_reverse_resume_pending = False
         self.rivian_mads_resume_countdown = 0.0
+        self.rivian_mads_last_warning_second = 0
+        self.rivian_mads_countdown_ticks = 0
+        self.rivian_mads_countdown_delay = 0
 
     # Copy of previous SelfdriveD states for MADS events handling
     self.selfdrive.enabled_prev = self.selfdrive.enabled
