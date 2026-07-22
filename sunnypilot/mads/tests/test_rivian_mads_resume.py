@@ -56,7 +56,7 @@ def test_drive_at_or_below_selected_speed_blocks_silent_resume(mocker):
 def test_drive_above_selected_speed_allows_silent_resume(mocker):
   mads = make_mads(mocker)
   mads.rivian_reverse_resume_pending = True
-  mads.rivian_mads_resume_delay = DT_CTRL
+  mads.rivian_mads_resume_countdown = DT_CTRL
   assert mads.should_silent_lkas_enable(car_state(20.1))
 
 
@@ -64,7 +64,7 @@ def test_sunnylink_selection_changes_resume_threshold(mocker):
   mads = make_mads(mocker)
   mads.rivian_reverse_resume_pending = True
   mads.rivian_mads_auto_resume_speed = 10
-  mads.rivian_mads_resume_delay = DT_CTRL
+  mads.rivian_mads_resume_countdown = DT_CTRL
   assert mads.should_silent_lkas_enable(car_state(11))
 
 
@@ -78,7 +78,7 @@ def test_metric_selection_uses_kph(mocker):
   mads.rivian_reverse_resume_pending = True
   mads.is_metric = True
   assert not mads.should_silent_lkas_enable(car_state(12.4))  # about 20 km/h
-  mads.rivian_mads_resume_delay = DT_CTRL
+  mads.rivian_mads_resume_countdown = DT_CTRL
   assert mads.should_silent_lkas_enable(car_state(12.5))
 
 

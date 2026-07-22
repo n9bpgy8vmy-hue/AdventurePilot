@@ -107,7 +107,7 @@ class ModularAssistiveDrivingSystem:
         return False
 
       if self.rivian_mads_resume_countdown <= 0.0:
-        delay = max(1, min(5, self.rivian_mads_resume_delay))
+        delay = max(1, min(5, int(self.rivian_mads_resume_delay)))
         self.rivian_mads_resume_countdown = float(delay)
         self.events_sp.add(RIVIAN_MADS_RESUME_WARNING_EVENTS[delay])
 
