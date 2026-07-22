@@ -12,6 +12,7 @@ from opendbc.car.hyundai.values import HyundaiFlags
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_CTRL
+from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.mads.helpers import MadsSteeringModeOnBrake, read_steering_mode_param, MADS_NO_ACC_MAIN_BUTTON
 from openpilot.sunnypilot.mads.state import StateMachine, GEARS_ALLOW_PAUSED_SILENT
 
@@ -71,6 +72,33 @@ class ModularAssistiveDrivingSystem:
     self.rivian_reverse_resume_pending = False
     self.rivian_mads_resume_countdown = 0.0
 
+  def log_rivian_mads_resume(self, action: str, CS: structs.CarState, **kwargs) -> None:
+    cloudlog.event(
+      "rivian mads reverse resume",
+      action=action,
+      gear=str(CS.gearShifter),
+      speed_ms=round(CS.vEgo, 3),
+      threshold=self.rivian_mads_auto_resume_speed,
+      is_metric=self.is_metric,
+      configured_delay=self.rivian_mads_resume_delay,
+      **kwargs,
+    )
+
+  def arm_rivian_reverse_resume(self, CS: structs.CarState, source: str) -> None:
+    if not self.rivian_reverse_resume_pending:
+      self.log_rivian_mads_resume("armed", CS, source=source)
+    self.rivian_reverse_resume_pending = True
+
+  def reset_rivian_mads_countdown(self, CS: structs.CarState, reason: str) -> None:
+    if self.rivian_mads_resume_countdown > 0.0:
+      self.log_rivian_mads_resume(
+        "countdown_reset",
+        CS,
+        reason=reason,
+        remaining_seconds=round(self.rivian_mads_resume_countdown, 2),
+      )
+    self.rivian_mads_resume_countdown = 0.0
+
   def read_params(self):
     self.main_enabled_toggle = self.params.get_bool("MadsMainCruiseAllowed")
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
@@ -91,7 +119,7 @@ class ModularAssistiveDrivingSystem:
 
     if self.events_sp.contains_in_list(GEARS_ALLOW_PAUSED_SILENT):
       if self.CP.brand == "rivian" and self.rivian_reverse_resume_pending:
-        self.rivian_mads_resume_countdown = 0.0
+        self.reset_rivian_mads_countdown(CS, "paused_event")
       return False
 
     # After a Rivian Reverse-triggered pause, wait to resume lateral control
@@ -99,21 +127,24 @@ class ModularAssistiveDrivingSystem:
     # Other pause/resume paths are intentionally unaffected by this setting.
     if self.CP.brand == "rivian" and self.rivian_reverse_resume_pending:
       if CS.gearShifter != GearShifter.drive:
-        self.rivian_mads_resume_countdown = 0.0
+        self.reset_rivian_mads_countdown(CS, "not_in_drive")
         return False
       speed_factor = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
       if CS.vEgo <= self.rivian_mads_auto_resume_speed * speed_factor:
-        self.rivian_mads_resume_countdown = 0.0
+        self.reset_rivian_mads_countdown(CS, "below_resume_speed")
         return False
 
       if self.rivian_mads_resume_countdown <= 0.0:
         delay = max(1, min(5, int(self.rivian_mads_resume_delay)))
         self.rivian_mads_resume_countdown = float(delay)
+        self.log_rivian_mads_resume("countdown_started", CS, delay_seconds=delay)
         self.events_sp.add(RIVIAN_MADS_RESUME_WARNING_EVENTS[delay])
 
       self.rivian_mads_resume_countdown = max(0.0, self.rivian_mads_resume_countdown - DT_CTRL)
       if self.rivian_mads_resume_countdown > 0.0:
         return False
+
+      self.log_rivian_mads_resume("resumed", CS)
 
     return True
 
@@ -167,12 +198,12 @@ class ModularAssistiveDrivingSystem:
           self.transition_paused_state()
       if self.events.has(EventName.wrongGear) and (CS.vEgo < 2.5 or CS.gearShifter == GearShifter.reverse):
         if self.CP.brand == "rivian" and CS.gearShifter == GearShifter.reverse:
-          self.rivian_reverse_resume_pending = True
+          self.arm_rivian_reverse_resume(CS, "wrongGear")
         self.replace_event(EventName.wrongGear, EventNameSP.silentWrongGear)
         self.transition_paused_state()
       if self.events.has(EventName.reverseGear):
         if self.CP.brand == "rivian":
-          self.rivian_reverse_resume_pending = True
+          self.arm_rivian_reverse_resume(CS, "reverseGear")
         self.replace_event(EventName.reverseGear, EventNameSP.silentReverseGear)
         self.transition_paused_state()
       if self.events.has(EventName.brakeHold):

@@ -124,3 +124,42 @@ def test_each_configurable_delay_resumes_once(mocker):
         break
     else:
       raise AssertionError(f"MADS did not resume after the {delay}-second warning")
+
+
+def test_logs_reverse_resume_lifecycle(mocker):
+  log_event = mocker.patch("openpilot.sunnypilot.mads.mads.cloudlog.event")
+  mads = make_mads(mocker)
+  reverse = car_state(0, structs.CarState.GearShifter.reverse)
+  drive = car_state(21)
+
+  mads.arm_rivian_reverse_resume(reverse, "reverseGear")
+  log_event.assert_called_once_with(
+    "rivian mads reverse resume",
+    action="armed",
+    gear=str(reverse.gearShifter),
+    speed_ms=0.0,
+    threshold=20,
+    is_metric=False,
+    configured_delay=3,
+    source="reverseGear",
+  )
+
+  log_event.reset_mock()
+  assert not mads.should_silent_lkas_enable(drive)
+  assert log_event.call_args.kwargs["action"] == "countdown_started"
+  assert log_event.call_args.kwargs["delay_seconds"] == 3
+
+  log_event.reset_mock()
+  assert not mads.should_silent_lkas_enable(reverse)
+  assert log_event.call_args.kwargs["action"] == "countdown_reset"
+  assert log_event.call_args.kwargs["reason"] == "not_in_drive"
+
+
+def test_logs_resume_after_countdown(mocker):
+  log_event = mocker.patch("openpilot.sunnypilot.mads.mads.cloudlog.event")
+  mads = make_mads(mocker)
+  mads.rivian_reverse_resume_pending = True
+  mads.rivian_mads_resume_countdown = DT_CTRL
+
+  assert mads.should_silent_lkas_enable(car_state(21))
+  assert log_event.call_args.kwargs["action"] == "resumed"
