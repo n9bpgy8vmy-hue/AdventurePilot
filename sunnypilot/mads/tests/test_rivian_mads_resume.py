@@ -86,7 +86,7 @@ def test_warning_alert_starts_configured_countdown(mocker):
   mads = make_mads(mocker)
   mads.rivian_reverse_resume_pending = True
   assert not mads.should_silent_lkas_enable(car_state(21))
-  assert mads.events_sp.contains(custom.OnroadEventSP.EventName.rivianMadsResumeWarning3Sec)
+  assert mads.events_sp.has(custom.OnroadEventSP.EventName.rivianMadsResumeWarning3Sec)
   assert mads.rivian_mads_resume_countdown == 3 - DT_CTRL
 
 
@@ -119,4 +119,4 @@ def test_each_configurable_delay_resumes_once(mocker):
       assert not mads.should_silent_lkas_enable(car_state(21))
     assert mads.should_silent_lkas_enable(car_state(21))
     warning_event = getattr(custom.OnroadEventSP.EventName, f"rivianMadsResumeWarning{delay}Sec")
-    assert mads.events_sp.contains(warning_event)
+    assert mads.events_sp.has(warning_event)
