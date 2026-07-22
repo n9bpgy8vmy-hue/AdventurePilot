@@ -26,6 +26,8 @@ class ControlsExt(ModelStateBase):
     self.params = params
     self._param_update_time: float = 0.0
     self.blinker_pause_lateral = BlinkerPauseLateral()
+    self.rivian_post_turn_observe = False
+    self.rivian_post_turn_go_live = False
 
     cloudlog.info("controlsd_ext is waiting for CarParamsSP")
     self.CP_SP = messaging.log_from_bytes(params.get("CarParamsSP", block=True), custom.CarParamsSP)
@@ -50,6 +52,8 @@ class ControlsExt(ModelStateBase):
   def get_params_sp(self, sm: messaging.SubMaster) -> None:
     if time.monotonic() - self._param_update_time > PARAMS_UPDATE_PERIOD:
       self.blinker_pause_lateral.get_params()
+      self.rivian_post_turn_observe = self.params.get_bool("RivianPostTurnObserve")
+      self.rivian_post_turn_go_live = self.params.get_bool("RivianPostTurnGoLive")
 
       if self.CP.lateralTuning.which() == 'torque':
         self.lat_delay = get_lat_delay(self.params, sm["liveDelay"].lateralDelay)
@@ -57,12 +61,14 @@ class ControlsExt(ModelStateBase):
       self._param_update_time = time.monotonic()
 
   def get_lat_active(self, sm: messaging.SubMaster) -> bool:
-    if self.blinker_pause_lateral.update(sm['carState']):
+    mads = sm['selfdriveStateSP'].mads
+    rivian_post_turn_handles_pause = self.CP.brand == "rivian" and self.rivian_post_turn_observe and \
+      self.rivian_post_turn_go_live and mads.available
+    if not rivian_post_turn_handles_pause and self.blinker_pause_lateral.update(sm['carState']):
       return False
 
-    ss_sp = sm['selfdriveStateSP']
-    if ss_sp.mads.available:
-      return bool(ss_sp.mads.active)
+    if mads.available:
+      return bool(mads.active)
 
     # MADS not available, use stock state to engage
     return bool(sm['selfdriveState'].active)

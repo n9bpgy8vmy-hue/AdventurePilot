@@ -17,6 +17,7 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.mads.helpers import MadsSteeringModeOnBrake, read_steering_mode_param, MADS_NO_ACC_MAIN_BUTTON
 from openpilot.sunnypilot.mads.state import StateMachine, GEARS_ALLOW_PAUSED_SILENT
+from openpilot.sunnypilot.rivianpilot.post_turn_resume import PostTurnAction, PostTurnResume
 
 State = custom.ModularAssistiveDrivingSystem.ModularAssistiveDrivingSystemState
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -78,6 +79,8 @@ class ModularAssistiveDrivingSystem:
     self.rivian_mads_countdown_ticks = 0
     self.rivian_mads_countdown_delay = 0
     self.rivian_last_config_error = None
+    self.post_turn_resume = PostTurnResume(self.params) if self.CP.brand == "rivian" else None
+    self.post_turn_action = PostTurnAction.none
     self.validate_rivian_mads_config()
 
   def validate_rivian_mads_config(self) -> None:
@@ -143,7 +146,22 @@ class ModularAssistiveDrivingSystem:
     self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
     self.rivian_mads_resume_delay = self.params.get("RivianMadsResumeDelay", return_default=True)
     self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
+    if self.post_turn_resume is not None:
+      self.post_turn_resume.read_params()
     self.validate_rivian_mads_config()
+
+  def update_post_turn_resume(self, CS: structs.CarState) -> None:
+    if self.post_turn_resume is None:
+      return
+
+    model_valid = self.selfdrive.sm.valid['modelV2'] and self.selfdrive.sm.recv_frame['modelV2'] > 0
+    self.post_turn_action, warning_second = self.post_turn_resume.update(
+      CS, self.selfdrive.sm['modelV2'], model_valid, self.active,
+    )
+    if warning_second is not None:
+      self.events_sp.add(RIVIAN_MADS_RESUME_WARNING_EVENTS[warning_second])
+    if self.post_turn_action == PostTurnAction.pause:
+      self.transition_paused_state()
 
   def pedal_pressed_non_gas_pressed(self, CS: structs.CarState) -> bool:
     # ignore `pedalPressed` events caused by gas presses
@@ -160,6 +178,9 @@ class ModularAssistiveDrivingSystem:
       if self.CP.brand == "rivian" and self.rivian_reverse_resume_pending:
         self.reset_rivian_mads_countdown(CS, "paused_event")
       return False
+
+    if self.post_turn_resume is not None and self.post_turn_resume.pending and self.post_turn_resume.live_sequence:
+      return self.post_turn_action == PostTurnAction.resume
 
     # After a Rivian Reverse-triggered pause, wait to resume lateral control
     # until Drive is selected and the Sunnylink minimum speed is exceeded.
@@ -241,6 +262,8 @@ class ModularAssistiveDrivingSystem:
       self.lateral_mismatch_counter += 1
 
   def update_events(self, CS: structs.CarState):
+    self.update_post_turn_resume(CS)
+
     if not self.selfdrive.enabled and self.enabled:
       if CS.standstill:
         if self.events.has(EventName.doorOpen):
@@ -346,6 +369,13 @@ class ModularAssistiveDrivingSystem:
 
     if not self.CP.passive and self.selfdrive.initialized:
       self.enabled, self.active = self.state_machine.update()
+      if self.post_turn_resume is not None:
+        if self.state_machine.state == State.disabled:
+          self.post_turn_resume.reset(CS, "mads_disabled")
+          self.post_turn_action = PostTurnAction.none
+        elif self.post_turn_action == PostTurnAction.resume and self.state_machine.state != State.paused:
+          self.post_turn_resume.reset()
+          self.post_turn_action = PostTurnAction.none
       if self.CP.brand == "rivian" and self.state_machine.state != State.paused:
         self.rivian_reverse_resume_pending = False
         self.rivian_mads_resume_countdown = 0.0

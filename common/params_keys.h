@@ -270,6 +270,12 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RivianPilotLaneHuggingMinSpeed", {PERSISTENT | BACKUP, INT, "25"}},  // MPH or km/h
     {"RivianPilotLaneHuggingAlertDistance", {PERSISTENT | BACKUP, INT, "150"}},  // meters
     {"RivianPilotLaneHuggingLocations", {PERSISTENT, JSON}},
+    {"RivianPostTurnObserve", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"RivianPostTurnGoLive", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"RivianPostTurnMaxSpeed", {PERSISTENT | BACKUP, INT, "30"}},  // MPH or km/h
+    {"RivianPostTurnMinResumeSpeed", {PERSISTENT | BACKUP, INT, "10"}},  // MPH or km/h
+    {"RivianPostTurnStableSeconds", {PERSISTENT | BACKUP, INT, "1"}},
+    {"RivianPostTurnResumeDelay", {PERSISTENT | BACKUP, INT, "3"}},
     {"RivianMadsAutoResumeSpeed", {PERSISTENT | BACKUP, INT, "20"}},  // MPH or km/h
     {"RivianMadsResumeDelay", {PERSISTENT | BACKUP, INT, "3"}},  // seconds
     {"RivianResumeEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},

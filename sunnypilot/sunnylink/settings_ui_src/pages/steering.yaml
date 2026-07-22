@@ -92,6 +92,104 @@ sections:
       - type: capability
         field: brand
         equals: rivian
+- id: rivianpilot_post_turn_resume
+  title: RivianPilot Post-Turn Resume
+  description: Pause MADS for a signaled low-speed manual turn, then require a stable detected lane and warn before resuming.
+  items:
+  - key: RivianPostTurnObserve
+    widget: toggle
+    title: Observe Post-Turn Resume
+    description: Record when RivianPilot would pause and resume around a qualifying manual turn. Observation never changes steering or MADS. RivianPilot Feature Diagnostics must be enabled.
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - $ref: '#/macros/offroad'
+    - type: param
+      key: RivianPilotFeatureLogging
+      equals: true
+  - key: RivianPostTurnGoLive
+    widget: toggle
+    title: Go Live with Post-Turn Resume
+    description: Activate the observed behavior. Pauses MADS for qualifying signaled low-speed turns, confirms a stable lane, warns, and resumes. Default is off.
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - $ref: '#/macros/offroad'
+    - type: param
+      key: RivianPostTurnObserve
+      equals: true
+  - key: RivianPostTurnMaxSpeed
+    widget: option
+    title: Maximum Turn Pause Speed
+    description: Arm the manual-turn pause only at or below this speed.
+    min: 10
+    max: 40
+    step: 5
+    unit:
+      metric: km/h
+      imperial: mph
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPostTurnObserve
+      equals: true
+  - key: RivianPostTurnMinResumeSpeed
+    widget: option
+    title: Minimum Post-Turn Resume Speed
+    description: Keep MADS paused until the vehicle reaches at least this speed in Drive.
+    min: 5
+    max: 30
+    step: 5
+    unit:
+      metric: km/h
+      imperial: mph
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPostTurnObserve
+      equals: true
+  - key: RivianPostTurnStableSeconds
+    widget: option
+    title: Stable Lane Confirmation
+    description: Require both lane boundaries and settled steering/yaw continuously for this long before warning.
+    min: 1
+    max: 3
+    step: 1
+    unit: seconds
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPostTurnObserve
+      equals: true
+  - key: RivianPostTurnResumeDelay
+    widget: option
+    title: Post-Turn Resume Warning
+    description: Chime and wait this long after stable-lane confirmation before MADS resumes.
+    min: 1
+    max: 5
+    step: 1
+    unit: seconds
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPostTurnObserve
+      equals: true
 - id: rivianpilot_lane_hugging
   title: RivianPilot Lane-Hugging Observer
   description: Observe driver lane-position corrections and warn near previously observed locations. Phase 1 never changes steering or MADS.

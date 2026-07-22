@@ -6,6 +6,7 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.selfdrived.events import Events
 from openpilot.sunnypilot.mads.helpers import MadsSteeringModeOnBrake
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
+from openpilot.sunnypilot.rivianpilot.post_turn_resume import PostTurnAction
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 
 
@@ -19,11 +20,18 @@ def make_mads(mocker):
     "MadsMainCruiseAllowed": False,
     "MadsUnifiedEngagementMode": True,
     "IsMetric": False,
+    "RivianPostTurnObserve": False,
+    "RivianPostTurnGoLive": False,
+    "RivianPilotFeatureLogging": False,
   }.get(key, False))
   selfdrive.params.get = mocker.MagicMock(side_effect=lambda key, **kwargs: {
     "MadsSteeringMode": MadsSteeringModeOnBrake.REMAIN_ACTIVE,
     "RivianMadsAutoResumeSpeed": 20,
     "RivianMadsResumeDelay": 3,
+    "RivianPostTurnMaxSpeed": 30,
+    "RivianPostTurnMinResumeSpeed": 10,
+    "RivianPostTurnStableSeconds": 1,
+    "RivianPostTurnResumeDelay": 3,
   }[key])
   selfdrive.events = Events()
   selfdrive.events_sp = EventsSP()
@@ -71,6 +79,22 @@ def test_sunnylink_selection_changes_resume_threshold(mocker):
 def test_unrelated_pause_is_not_speed_gated(mocker):
   mads = make_mads(mocker)
   assert mads.should_silent_lkas_enable(car_state(5))
+
+
+def test_post_turn_pending_blocks_generic_silent_resume(mocker):
+  mads = make_mads(mocker)
+  mads.post_turn_resume.pending = True
+  mads.post_turn_resume.live_sequence = True
+  mads.post_turn_action = PostTurnAction.waiting
+  assert not mads.should_silent_lkas_enable(car_state(20))
+
+
+def test_post_turn_ready_allows_silent_resume(mocker):
+  mads = make_mads(mocker)
+  mads.post_turn_resume.pending = True
+  mads.post_turn_resume.live_sequence = True
+  mads.post_turn_action = PostTurnAction.resume
+  assert mads.should_silent_lkas_enable(car_state(20))
 
 
 def test_metric_selection_uses_kph(mocker):
