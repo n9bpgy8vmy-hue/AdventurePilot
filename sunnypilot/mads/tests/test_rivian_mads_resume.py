@@ -1,4 +1,4 @@
-from cereal import custom
+from cereal import custom, log
 from opendbc.car import structs
 
 from openpilot.common.constants import CV
@@ -23,12 +23,14 @@ def make_mads(mocker):
   selfdrive.params.get = mocker.MagicMock(side_effect=lambda key, **kwargs: {
     "MadsSteeringMode": MadsSteeringModeOnBrake.REMAIN_ACTIVE,
     "RivianMadsAutoResumeSpeed": 20,
+    "RivianMadsReversePauseSpeed": 10,
     "RivianMadsResumeDelay": 3,
   }[key])
   selfdrive.events = Events()
   selfdrive.events_sp = EventsSP()
   selfdrive.enabled = False
   selfdrive.enabled_prev = False
+  selfdrive.CS_prev = car_state(15)
   selfdrive.state_machine = mocker.MagicMock()
   return ModularAssistiveDrivingSystem(selfdrive)
 
@@ -97,3 +99,38 @@ def test_countdown_resets_if_speed_drops(mocker):
   assert mads.rivian_mads_resume_countdown > 0
   assert not mads.should_silent_lkas_enable(car_state(20))
   assert mads.rivian_mads_resume_countdown == 0
+
+
+def test_reverse_request_above_pause_speed_is_ignored(mocker):
+  mads = make_mads(mocker)
+  assert mads.should_ignore_rivian_reverse_request(car_state(11, structs.CarState.GearShifter.reverse))
+
+
+def test_reverse_at_or_below_pause_speed_is_not_ignored(mocker):
+  mads = make_mads(mocker)
+  assert not mads.should_ignore_rivian_reverse_request(car_state(10, structs.CarState.GearShifter.reverse))
+
+
+def test_ignored_reverse_request_remains_ignored_while_above_threshold(mocker):
+  mads = make_mads(mocker)
+  assert mads.should_ignore_rivian_reverse_request(car_state(11, structs.CarState.GearShifter.reverse))
+  mads.selfdrive.CS_prev.gearShifter = structs.CarState.GearShifter.reverse
+  assert mads.should_ignore_rivian_reverse_request(car_state(11, structs.CarState.GearShifter.reverse))
+
+
+def test_ignored_reverse_request_stops_at_pause_speed(mocker):
+  mads = make_mads(mocker)
+  assert mads.should_ignore_rivian_reverse_request(car_state(11, structs.CarState.GearShifter.reverse))
+  mads.selfdrive.CS_prev.gearShifter = structs.CarState.GearShifter.reverse
+  assert not mads.should_ignore_rivian_reverse_request(car_state(10, structs.CarState.GearShifter.reverse))
+
+
+def test_high_speed_reverse_request_does_not_pause_mads(mocker):
+  mads = make_mads(mocker)
+  mads.enabled = True
+  mads.events.add(log.OnroadEvent.EventName.wrongGear)
+  mads.events.add(log.OnroadEvent.EventName.reverseGear)
+  mads.update_events(car_state(11, structs.CarState.GearShifter.reverse))
+  assert not mads.events.has(log.OnroadEvent.EventName.wrongGear)
+  assert not mads.events.has(log.OnroadEvent.EventName.reverseGear)
+  assert not mads.events_sp.has(custom.OnroadEventSP.EventName.silentLkasDisable)

@@ -60,8 +60,10 @@ class ModularAssistiveDrivingSystem:
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
     self.is_metric = self.params.get_bool("IsMetric")
     self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
+    self.rivian_mads_reverse_pause_speed = self.params.get("RivianMadsReversePauseSpeed", return_default=True)
     self.rivian_mads_resume_delay = self.params.get("RivianMadsResumeDelay", return_default=True)
     self.rivian_reverse_resume_pending = False
+    self.rivian_reverse_request_ignored = False
     self.rivian_mads_resume_countdown = 0.0
 
   def read_params(self):
@@ -69,6 +71,7 @@ class ModularAssistiveDrivingSystem:
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
     self.is_metric = self.params.get_bool("IsMetric")
     self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
+    self.rivian_mads_reverse_pause_speed = self.params.get("RivianMadsReversePauseSpeed", return_default=True)
     self.rivian_mads_resume_delay = self.params.get("RivianMadsResumeDelay", return_default=True)
 
   def pedal_pressed_non_gas_pressed(self, CS: structs.CarState) -> bool:
@@ -133,6 +136,17 @@ class ModularAssistiveDrivingSystem:
     if self.state_machine.state != State.paused:
       self.events_sp.add(EventNameSP.silentLkasDisable)
 
+  def should_ignore_rivian_reverse_request(self, CS: structs.CarState) -> bool:
+    if self.CP.brand != "rivian" or CS.gearShifter != GearShifter.reverse:
+      self.rivian_reverse_request_ignored = False
+      return False
+
+    speed_factor = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
+    above_pause_speed = CS.vEgo > self.rivian_mads_reverse_pause_speed * speed_factor
+    entered_from_drive = self.selfdrive.CS_prev.gearShifter == GearShifter.drive
+    self.rivian_reverse_request_ignored = above_pause_speed and (entered_from_drive or self.rivian_reverse_request_ignored)
+    return self.rivian_reverse_request_ignored
+
   def replace_event(self, old_event: int, new_event: int):
     self.events.remove(old_event)
     self.events_sp.add(new_event)
@@ -150,6 +164,11 @@ class ModularAssistiveDrivingSystem:
 
   def update_events(self, CS: structs.CarState):
     if not self.selfdrive.enabled and self.enabled:
+      ignore_rivian_reverse = self.should_ignore_rivian_reverse_request(CS)
+      if ignore_rivian_reverse:
+        self.events.remove(EventName.wrongGear)
+        self.events.remove(EventName.reverseGear)
+
       if CS.standstill:
         if self.events.has(EventName.doorOpen):
           self.replace_event(EventName.doorOpen, EventNameSP.silentDoorOpen)
@@ -157,12 +176,12 @@ class ModularAssistiveDrivingSystem:
         if self.events.has(EventName.seatbeltNotLatched):
           self.replace_event(EventName.seatbeltNotLatched, EventNameSP.silentSeatbeltNotLatched)
           self.transition_paused_state()
-      if self.events.has(EventName.wrongGear) and (CS.vEgo < 2.5 or CS.gearShifter == GearShifter.reverse):
+      if not ignore_rivian_reverse and self.events.has(EventName.wrongGear) and (CS.vEgo < 2.5 or CS.gearShifter == GearShifter.reverse):
         if self.CP.brand == "rivian" and CS.gearShifter == GearShifter.reverse:
           self.rivian_reverse_resume_pending = True
         self.replace_event(EventName.wrongGear, EventNameSP.silentWrongGear)
         self.transition_paused_state()
-      if self.events.has(EventName.reverseGear):
+      if not ignore_rivian_reverse and self.events.has(EventName.reverseGear):
         if self.CP.brand == "rivian":
           self.rivian_reverse_resume_pending = True
         self.replace_event(EventName.reverseGear, EventNameSP.silentReverseGear)
