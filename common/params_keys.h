@@ -265,6 +265,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SpeedLimitValueOffset", {PERSISTENT | BACKUP, INT, "0"}},
 
     // Rivian
+    {"RivianMadsAutoResumeSpeed", {PERSISTENT | BACKUP, INT, "20"}},  // MPH or km/h
     {"RivianResumeEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
 
     // Smart Cruise Control

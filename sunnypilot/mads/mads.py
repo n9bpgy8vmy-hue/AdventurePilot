@@ -9,6 +9,7 @@ from cereal import log, custom
 
 from opendbc.car import structs
 from opendbc.car.hyundai.values import HyundaiFlags
+from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.sunnypilot.mads.helpers import MadsSteeringModeOnBrake, read_steering_mode_param, MADS_NO_ACC_MAIN_BUTTON
 from openpilot.sunnypilot.mads.state import StateMachine, GEARS_ALLOW_PAUSED_SILENT
@@ -56,10 +57,14 @@ class ModularAssistiveDrivingSystem:
     self.main_enabled_toggle = self.params.get_bool("MadsMainCruiseAllowed")
     self.steering_mode_on_brake = read_steering_mode_param(self.CP, self.CP_SP, self.params)
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
+    self.is_metric = self.params.get_bool("IsMetric")
+    self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
 
   def read_params(self):
     self.main_enabled_toggle = self.params.get_bool("MadsMainCruiseAllowed")
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
+    self.is_metric = self.params.get_bool("IsMetric")
+    self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
 
   def pedal_pressed_non_gas_pressed(self, CS: structs.CarState) -> bool:
     # ignore `pedalPressed` events caused by gas presses
@@ -74,6 +79,17 @@ class ModularAssistiveDrivingSystem:
 
     if self.events_sp.contains_in_list(GEARS_ALLOW_PAUSED_SILENT):
       return False
+
+    # Rivian enters the paused state while Reverse is selected. Do not let the
+    # generic silent-resume path reactivate lateral control at parking-lot
+    # speeds when Reverse is released. Resume automatically only in Drive and
+    # above the minimum speed selected in Sunnylink MADS settings.
+    if self.CP.brand == "rivian":
+      if CS.gearShifter != GearShifter.drive:
+        return False
+      speed_factor = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
+      if CS.vEgo <= self.rivian_mads_auto_resume_speed * speed_factor:
+        return False
 
     return True
 
