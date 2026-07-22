@@ -369,6 +369,8 @@ struct OnroadEventSP @0xda96579883444c35 {
     rivianMadsResumeWarning3Sec @26;
     rivianMadsResumeWarning4Sec @27;
     rivianMadsResumeWarning5Sec @28;
+    rivianPilotLaneCorrectionAheadLeft @29;
+    rivianPilotLaneCorrectionAheadRight @30;
   }
 }
 

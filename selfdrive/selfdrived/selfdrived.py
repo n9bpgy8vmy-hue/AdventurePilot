@@ -25,6 +25,7 @@ from openpilot.system.version import get_build_metadata
 from openpilot.system.hardware import HARDWARE
 
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
+from openpilot.sunnypilot.rivianpilot.lane_hugging_observer import LaneHuggingObserver
 from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
@@ -43,6 +44,7 @@ PandaType = log.PandaState.PandaType
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 EventName = log.OnroadEvent.EventName
+EventNameSP = custom.OnroadEventSP.EventName
 ButtonType = car.CarState.ButtonEvent.Type
 SafetyModel = car.CarParams.SafetyModel
 AlertLevel = log.DriverMonitoringState.AlertLevel
@@ -171,6 +173,7 @@ class SelfdriveD(CruiseHelper):
     self.events_sp_prev = []
 
     self.mads = ModularAssistiveDrivingSystem(self)
+    self.lane_hugging_observer = LaneHuggingObserver(self.params) if self.CP.brand == "rivian" else None
     self.icbm = IntelligentCruiseButtonManagement(self.CP, self.CP_SP)
 
     self.car_events_sp = CarSpecificEventsSP(self.CP, self.CP_SP)
@@ -460,6 +463,14 @@ class SelfdriveD(CruiseHelper):
     if gps_ok:
       self.distance_traveled = 0
     self.distance_traveled += abs(CS.vEgo) * DT_CTRL
+
+    if self.lane_hugging_observer is not None:
+      gps = self.sm[self.gps_location_service] if gps_ok else None
+      correction_direction = self.lane_hugging_observer.update(CS, self.sm['carControl'].latActive, gps)
+      if correction_direction == "left":
+        self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadLeft)
+      elif correction_direction == "right":
+        self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadRight)
 
     # TODO: fix simulator
     if not SIMULATION or REPLAY:

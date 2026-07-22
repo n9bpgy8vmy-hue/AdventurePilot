@@ -80,6 +80,14 @@ def rivian_mads_resume_warning_alert(delay: int) -> Alert:
     Priority.MID, VisualAlert.none, AudibleAlert.prompt, float(delay))
 
 
+def rivianpilot_lane_correction_ahead_alert(direction: str) -> Alert:
+  return Alert(
+    "Lane-position correction area ahead",
+    f"Previously corrected {direction} near this location",
+    AlertStatus.normal, AlertSize.mid,
+    Priority.LOW, VisualAlert.none, AudibleAlertSP.promptSingleLow, 3.)
+
+
 class EventsSP(EventsBase):
   def __init__(self):
     super().__init__()
@@ -266,5 +274,11 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
   EventNameSP.rivianMadsResumeWarning5Sec: {
     ET.PERMANENT: rivian_mads_resume_warning_alert(5),
+  },
+  EventNameSP.rivianPilotLaneCorrectionAheadLeft: {
+    ET.PERMANENT: rivianpilot_lane_correction_ahead_alert("left"),
+  },
+  EventNameSP.rivianPilotLaneCorrectionAheadRight: {
+    ET.PERMANENT: rivianpilot_lane_correction_ahead_alert("right"),
   },
 }

@@ -14,7 +14,7 @@ Record locations where the driver corrects lane position and warn on future appr
 
 Phase 1 scope is observation, bounded logging, and driver alerts only. It must not change steering commands, lateral control, MADS state, or engagement behavior.
 
-Status: approved definition; not yet implemented.
+Status: Phase 1 implementation in development; not yet vehicle-validated.
 
 ## Feature 3 — Navigation/turn assistance
 
