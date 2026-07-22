@@ -11,6 +11,7 @@ from opendbc.car import structs
 from opendbc.car.hyundai.values import HyundaiFlags
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
+from openpilot.common.realtime import DT_CTRL
 from openpilot.sunnypilot.mads.helpers import MadsSteeringModeOnBrake, read_steering_mode_param, MADS_NO_ACC_MAIN_BUTTON
 from openpilot.sunnypilot.mads.state import StateMachine, GEARS_ALLOW_PAUSED_SILENT
 
@@ -59,13 +60,16 @@ class ModularAssistiveDrivingSystem:
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
     self.is_metric = self.params.get_bool("IsMetric")
     self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
+    self.rivian_mads_resume_delay = self.params.get("RivianMadsResumeDelay", return_default=True)
     self.rivian_reverse_resume_pending = False
+    self.rivian_mads_resume_countdown = 0.0
 
   def read_params(self):
     self.main_enabled_toggle = self.params.get_bool("MadsMainCruiseAllowed")
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
     self.is_metric = self.params.get_bool("IsMetric")
     self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
+    self.rivian_mads_resume_delay = self.params.get("RivianMadsResumeDelay", return_default=True)
 
   def pedal_pressed_non_gas_pressed(self, CS: structs.CarState) -> bool:
     # ignore `pedalPressed` events caused by gas presses
@@ -79,6 +83,8 @@ class ModularAssistiveDrivingSystem:
       return False
 
     if self.events_sp.contains_in_list(GEARS_ALLOW_PAUSED_SILENT):
+      if self.CP.brand == "rivian" and self.rivian_reverse_resume_pending:
+        self.rivian_mads_resume_countdown = 0.0
       return False
 
     # After a Rivian Reverse-triggered pause, wait to resume lateral control
@@ -86,9 +92,19 @@ class ModularAssistiveDrivingSystem:
     # Other pause/resume paths are intentionally unaffected by this setting.
     if self.CP.brand == "rivian" and self.rivian_reverse_resume_pending:
       if CS.gearShifter != GearShifter.drive:
+        self.rivian_mads_resume_countdown = 0.0
         return False
       speed_factor = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
       if CS.vEgo <= self.rivian_mads_auto_resume_speed * speed_factor:
+        self.rivian_mads_resume_countdown = 0.0
+        return False
+
+      if self.rivian_mads_resume_countdown <= 0.0:
+        self.rivian_mads_resume_countdown = float(self.rivian_mads_resume_delay)
+        self.events_sp.add(EventNameSP.e2eChime)
+
+      self.rivian_mads_resume_countdown = max(0.0, self.rivian_mads_resume_countdown - DT_CTRL)
+      if self.rivian_mads_resume_countdown > 0.0:
         return False
 
     return True
@@ -217,7 +233,8 @@ class ModularAssistiveDrivingSystem:
 
     if self.should_silent_lkas_enable(CS):
       if self.state_machine.state == State.paused:
-        self.events_sp.add(EventNameSP.silentLkasEnable)
+        resume_event = EventNameSP.lkasEnable if self.rivian_reverse_resume_pending else EventNameSP.silentLkasEnable
+        self.events_sp.add(resume_event)
 
     if self.lateral_mismatch_counter >= 200:
       self.events_sp.add(EventNameSP.controlsMismatchLateral)
@@ -239,6 +256,7 @@ class ModularAssistiveDrivingSystem:
       self.enabled, self.active = self.state_machine.update()
       if self.CP.brand == "rivian" and self.state_machine.state != State.paused:
         self.rivian_reverse_resume_pending = False
+        self.rivian_mads_resume_countdown = 0.0
 
     # Copy of previous SelfdriveD states for MADS events handling
     self.selfdrive.enabled_prev = self.selfdrive.enabled

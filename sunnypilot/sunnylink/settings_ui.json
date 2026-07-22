@@ -212,6 +212,23 @@
                       "equals": "rivian"
                     }
                   ]
+                },
+                {
+                  "key": "RivianMadsResumeDelay",
+                  "widget": "option",
+                  "title": "MADS Auto-Resume Warning",
+                  "description": "After the minimum auto-resume speed is reached, play a chime and wait this long before MADS resumes.",
+                  "min": 1,
+                  "max": 5,
+                  "step": 1,
+                  "unit": "seconds",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ]
                 }
               ]
             }
