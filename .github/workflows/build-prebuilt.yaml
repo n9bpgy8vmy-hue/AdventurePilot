@@ -19,7 +19,7 @@ name: Build Prebuilt
 
 on:
   push:
-    branches: [ rel-src, stg-src ]
+    branches: [ rel-src, stg-src, apdev ]
   workflow_dispatch:
     inputs:
       source_branch:
@@ -115,6 +115,11 @@ jobs:
           echo "Building rest of sunnypilot..."
           scons -j$(nproc) cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal
           touch ${BUILD_DIR}/prebuilt
+
+      - name: Test Rivian MADS Reverse resume
+        run: |
+          cd $BUILD_DIR
+          PYTHONPATH=$BUILD_DIR python -m pytest -q sunnypilot/mads/tests/test_rivian_mads_resume.py
 
       - name: Prepare Output
         run: |
