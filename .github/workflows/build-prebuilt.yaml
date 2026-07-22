@@ -119,7 +119,8 @@ jobs:
       - name: Test Rivian MADS Reverse resume
         run: |
           cd $BUILD_DIR
-          PYTHONPATH=$BUILD_DIR python -m pytest -q sunnypilot/mads/tests/test_rivian_mads_resume.py
+          PARAMS_ROOT=${{ github.workspace }}/.test_params PYTHONPATH=$BUILD_DIR \
+            python -m pytest -q sunnypilot/mads/tests/test_rivian_mads_resume.py
 
       - name: Prepare Output
         run: |
