@@ -84,6 +84,14 @@ sections:
       - type: capability
         field: brand
         equals: rivian
+    - key: RivianPilotFeatureLogging
+      widget: toggle
+      title: RivianPilot Feature Diagnostics
+      description: Log only RivianPilot feature state transitions for troubleshooting. Uses the existing rotated vehicle logs and does not create a separate log file.
+      visibility:
+      - type: capability
+        field: brand
+        equals: rivian
 - id: blinker
   title: Blinker Control
   description: Lateral pause behavior during turn signals

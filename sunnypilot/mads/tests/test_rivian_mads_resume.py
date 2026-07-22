@@ -129,6 +129,7 @@ def test_each_configurable_delay_resumes_once(mocker):
 def test_logs_reverse_resume_lifecycle(mocker):
   log_event = mocker.patch("openpilot.sunnypilot.mads.mads.cloudlog.event")
   mads = make_mads(mocker)
+  mads.rivianpilot_feature_logging = True
   reverse = car_state(0, structs.CarState.GearShifter.reverse)
   drive = car_state(21)
 
@@ -158,8 +159,18 @@ def test_logs_reverse_resume_lifecycle(mocker):
 def test_logs_resume_after_countdown(mocker):
   log_event = mocker.patch("openpilot.sunnypilot.mads.mads.cloudlog.event")
   mads = make_mads(mocker)
+  mads.rivianpilot_feature_logging = True
   mads.rivian_reverse_resume_pending = True
   mads.rivian_mads_resume_countdown = DT_CTRL
 
   assert mads.should_silent_lkas_enable(car_state(21))
   assert log_event.call_args.kwargs["action"] == "resumed"
+
+
+def test_feature_logging_defaults_to_off(mocker):
+  log_event = mocker.patch("openpilot.sunnypilot.mads.mads.cloudlog.event")
+  mads = make_mads(mocker)
+  mads.rivian_reverse_resume_pending = True
+
+  assert not mads.should_silent_lkas_enable(car_state(21))
+  log_event.assert_not_called()

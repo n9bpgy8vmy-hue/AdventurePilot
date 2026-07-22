@@ -69,10 +69,14 @@ class ModularAssistiveDrivingSystem:
     self.is_metric = self.params.get_bool("IsMetric")
     self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
     self.rivian_mads_resume_delay = self.params.get("RivianMadsResumeDelay", return_default=True)
+    self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
     self.rivian_reverse_resume_pending = False
     self.rivian_mads_resume_countdown = 0.0
 
   def log_rivian_mads_resume(self, action: str, CS: structs.CarState, **kwargs) -> None:
+    if not self.rivianpilot_feature_logging:
+      return
+
     cloudlog.event(
       "rivian mads reverse resume",
       action=action,
@@ -105,6 +109,7 @@ class ModularAssistiveDrivingSystem:
     self.is_metric = self.params.get_bool("IsMetric")
     self.rivian_mads_auto_resume_speed = self.params.get("RivianMadsAutoResumeSpeed", return_default=True)
     self.rivian_mads_resume_delay = self.params.get("RivianMadsResumeDelay", return_default=True)
+    self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
 
   def pedal_pressed_non_gas_pressed(self, CS: structs.CarState) -> bool:
     # ignore `pedalPressed` events caused by gas presses

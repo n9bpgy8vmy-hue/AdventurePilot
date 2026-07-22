@@ -265,6 +265,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SpeedLimitValueOffset", {PERSISTENT | BACKUP, INT, "0"}},
 
     // Rivian
+    {"RivianPilotFeatureLogging", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianMadsAutoResumeSpeed", {PERSISTENT | BACKUP, INT, "20"}},  // MPH or km/h
     {"RivianMadsResumeDelay", {PERSISTENT | BACKUP, INT, "3"}},  // seconds
     {"RivianResumeEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
