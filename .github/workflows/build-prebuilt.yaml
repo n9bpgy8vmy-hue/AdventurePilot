@@ -117,14 +117,15 @@ jobs:
           scons -j$(nproc) cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal
           touch ${BUILD_DIR}/prebuilt
 
-      - name: Test RivianPilot Features 1, 2, and 4
+      - name: Test RivianPilot Features 1, 2, 4, and 5
         run: |
           cd $BUILD_DIR
           PARAMS_ROOT=${{ github.workspace }}/.test_params PYTHONPATH=$BUILD_DIR \
             python -m pytest -q \
               sunnypilot/mads/tests/test_rivian_mads_resume.py \
               sunnypilot/rivianpilot/tests/test_lane_hugging_observer.py \
-              sunnypilot/rivianpilot/tests/test_post_turn_resume.py
+              sunnypilot/rivianpilot/tests/test_post_turn_resume.py \
+              sunnypilot/rivianpilot/tests/test_blind_spot_observer.py
 
       - name: Validate RivianPilot Sunnylink settings
         run: |

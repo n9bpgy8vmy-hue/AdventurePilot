@@ -41,6 +41,7 @@ class PostTurnResume:
     self.error_logged = False
     self.pause_confirmation_ticks = 0
     self.high_speed_lane_confirmed = False
+    self.active_blinker_direction = "none"
     self.read_params()
 
   def read_params(self) -> None:
@@ -135,6 +136,7 @@ class PostTurnResume:
     self.last_wait_reason = None
     self.pause_confirmation_ticks = 0
     self.high_speed_lane_confirmed = False
+    self.active_blinker_direction = "none"
 
   def _speed_factor(self) -> float:
     return CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
@@ -149,6 +151,24 @@ class PostTurnResume:
       CS.gearShifter == structs.CarState.GearShifter.drive and
       CS.vEgo <= self.max_turn_speed * self._speed_factor()
     )
+
+  @staticmethod
+  def _blinker_direction(CS: structs.CarState) -> str:
+    if CS.leftBlinker == CS.rightBlinker:
+      return "none"
+    return "left" if CS.leftBlinker else "right"
+
+  def _extend_turn_sequence(self, CS: structs.CarState, current_direction: str) -> None:
+    """Keep MADS paused while restarting only final-turn stability evaluation."""
+    previous_direction = self.direction
+    self.direction = current_direction
+    self.stable_ticks = 0
+    self.countdown = 0.0
+    self.last_warning_second = 0
+    self.last_wait_reason = None
+    self.high_speed_lane_confirmed = False
+    self._log("turn_sequence_extended", CS, previous_direction=previous_direction,
+              new_direction=current_direction)
 
   def _above_turn_speed(self, CS: structs.CarState) -> bool:
     return CS.vEgo > self.max_turn_speed * self._speed_factor()
@@ -203,7 +223,8 @@ class PostTurnResume:
         return PostTurnAction.none, None
       self.pending = True
       self.live_sequence = self.go_live
-      self.direction = "left" if CS.leftBlinker else "right"
+      self.direction = self._blinker_direction(CS)
+      self.active_blinker_direction = self.direction
       self.pause_confirmation_ticks = 0
       self._log("armed", CS, max_turn_speed=self.max_turn_speed, mode="live" if self.live_sequence else "observe")
       return (PostTurnAction.pause if self.live_sequence else PostTurnAction.none), None
@@ -213,6 +234,14 @@ class PostTurnResume:
     if CS.gearShifter != structs.CarState.GearShifter.drive:
       self.reset(CS, "left_drive")
       return PostTurnAction.none, None
+
+    # Treat every new blinker edge while paused as another turn in the same
+    # manual maneuver. Keep MADS paused, but make the final turn authoritative
+    # for direction, lane confidence, stability, and warning countdown.
+    current_blinker_direction = self._blinker_direction(CS)
+    if current_blinker_direction != "none" and current_blinker_direction != self.active_blinker_direction:
+      self._extend_turn_sequence(CS, current_blinker_direction)
+    self.active_blinker_direction = current_blinker_direction
 
     if self.live_sequence and lateral_active:
       self.pause_confirmation_ticks += 1

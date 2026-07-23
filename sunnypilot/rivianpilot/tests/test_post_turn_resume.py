@@ -244,6 +244,58 @@ def test_countdown_resets_when_driver_turns_again(mocker):
   assert feature.stable_ticks == 0
 
 
+def test_opposite_consecutive_turn_replaces_direction_and_resumes_after_final_turn(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  assert feature.update(car_state(right=True), model(), True, True)[0] == PostTurnAction.pause
+
+  # Confirm MADS paused, then release the first blinker.
+  feature.update(car_state(right=True), model(), True, False)
+  feature.update(car_state(), model(), True, False)
+
+  # Start an opposite turn before the first sequence can resume.
+  feature.high_speed_lane_confirmed = True
+  feature.stable_ticks = 20
+  feature.countdown = 2.0
+  action, warning = feature.update(car_state(left=True), model(), True, False)
+  assert action == PostTurnAction.waiting
+  assert warning is None
+  assert feature.pending
+  assert feature.direction == "left"
+  assert feature.active_blinker_direction == "left"
+  assert not feature.high_speed_lane_confirmed
+  assert feature.stable_ticks == 0
+  assert feature.countdown == 0.0
+
+  # Only the stable lane after the final blinker is released may resume MADS.
+  final_lane = car_state(speed_mph=15)
+  for _ in range(round(feature.stable_seconds / DT_CTRL)):
+    action, warning = feature.update(final_lane, model(), True, False)
+    assert action == PostTurnAction.waiting
+    assert warning is None
+
+  for _ in range(round(feature.resume_delay / DT_CTRL) + 2):
+    action, _ = feature.update(final_lane, model(), True, False)
+    if action == PostTurnAction.resume:
+      break
+  else:
+    raise AssertionError("consecutive-turn sequence did not resume after final stable lane")
+
+
+def test_same_direction_new_blinker_edge_extends_sequence(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  feature.update(car_state(right=True), model(), True, True)
+  feature.update(car_state(right=True), model(), True, False)
+  feature.update(car_state(), model(), True, False)
+
+  feature.stable_ticks = 50
+  feature.countdown = 1.0
+  feature.update(car_state(right=True), model(), True, False)
+
+  assert feature.direction == "right"
+  assert feature.stable_ticks == 0
+  assert feature.countdown == 0.0
+
+
 def test_reverse_cancels_and_yields_to_reverse_feature(mocker):
   feature = PostTurnResume(make_params(mocker))
   feature.update(car_state(left=True), model(), True, True)

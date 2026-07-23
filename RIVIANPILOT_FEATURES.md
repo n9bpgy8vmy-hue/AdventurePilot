@@ -33,6 +33,7 @@ Safety boundaries:
 - Arms only while MADS lateral control is active, exactly one turn signal is on, Drive is selected, and speed is at or below the configured turn threshold.
 - Keeps lateral control paused until the signal is off, driver steering is released, steering angle and yaw have settled, both lane boundaries remain confident for the configured stable-lane period, and minimum resume speed is met.
 - Warns for the configured 1–5 seconds before resuming.
+- Treats closely spaced same- or opposite-direction turns as one continuous manual maneuver. Each new blinker edge keeps MADS paused and restarts final-lane stability evaluation from the newest turn.
 - Cancels immediately when leaving Drive so Feature 1 remains authoritative for Reverse behavior.
 - Does not alter ordinary high-speed behavior unless a qualifying low-speed turn already armed the pause.
 
