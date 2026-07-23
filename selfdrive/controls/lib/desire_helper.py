@@ -1,6 +1,8 @@
 from cereal import log, custom
 from openpilot.common.constants import CV
+from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
+from openpilot.sunnypilot.rivianpilot.blind_spot_observer import BlindSpotObserver
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeController, AutoLaneChangeMode
 from openpilot.sunnypilot.selfdrive.controls.lib.lane_turn_desire import LaneTurnController
 
@@ -51,6 +53,7 @@ class DesireHelper:
     self.alc = AutoLaneChangeController(self)
     self.lane_turn_controller = LaneTurnController(self)
     self.lane_turn_direction = TurnDirection.none
+    self.blind_spot_observer = BlindSpotObserver(Params())
 
   @staticmethod
   def get_lane_change_direction(CS):
@@ -143,3 +146,6 @@ class DesireHelper:
         self.desire = log.Desire.none
 
     self.alc.update_state()
+
+    # Observe only. Any observer failure is contained internally and cannot alter lane-change state.
+    self.blind_spot_observer.update(carstate, self.lane_change_state, self.lane_change_direction)

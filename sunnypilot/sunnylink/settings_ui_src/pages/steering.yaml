@@ -214,6 +214,22 @@ sections:
     - type: param
       key: RivianPilotLaneHuggingObserver
       equals: true
+- id: rivianpilot_blind_spot_observer
+  title: RivianPilot Blind-Spot Observer
+  description: Observe Rivian blind-spot signals and native lane-change decisions. This feature never changes steering or lane-change behavior.
+  items:
+  - key: RivianPilotBlindSpotObserver
+    widget: toggle
+    title: Observe Blind-Spot Signals
+    description: Log bounded state transitions while one blinker is active. Requires RivianPilot Feature Diagnostics. Any observer error disables only this observer.
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotFeatureLogging
+      equals: true
 - id: blinker
   title: Blinker Control
   description: Lateral pause behavior during turn signals

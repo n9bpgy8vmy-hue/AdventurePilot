@@ -44,6 +44,7 @@ Make automatic lane changes more conservative on undivided and single-lane roads
 
 Planned phases:
 
+0. Observe and validate Rivian left/right blind-spot signals, driver torque/nudge recognition, and the native lane-change blocked outcome. No alerts or control changes.
 1. Observe and log proposed lane changes, lane-line/road-edge confidence, adjacent-lane evidence, and the eventual driver action. No alerts or control changes.
 2. Add warning-only behavior for questionable lane-change requests after replay and vehicle-data validation.
 3. Consider blocking automatic lane-change initiation only if collected evidence demonstrates sufficiently reliable detection.
@@ -57,7 +58,7 @@ Safety boundaries:
 - Weak, missing, stale, or conflicting evidence must disable automatic lane-change initiation rather than guess.
 - Observe-only and warning-only phases must complete before any control-affecting phase is considered.
 
-Status: roadmap only. Not implemented or approved for control-affecting use.
+Status: Phase 0 blind-spot observer implemented for bounded diagnostics; not yet vehicle-validated. Remaining phases are roadmap only and are not approved for control-affecting use.
 
 ## Diagnostics policy
 
