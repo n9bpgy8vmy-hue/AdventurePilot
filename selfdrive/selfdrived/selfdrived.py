@@ -477,7 +477,10 @@ class SelfdriveD(CruiseHelper):
     if self.lane_hugging_observer is not None:
       try:
         gps = self.sm[self.gps_location_service] if gps_ok else None
-        correction_direction = self.lane_hugging_observer.update(CS, self.sm['carControl'].latActive, gps)
+        correction_direction = self.lane_hugging_observer.update(
+          CS, self.sm['carControl'].latActive, gps, self.sm['modelV2'], self.sm['controlsState'],
+          self.sm['carControl'], self.sm['carOutput'],
+        )
         if correction_direction == "left":
           self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadLeft)
         elif correction_direction == "right":

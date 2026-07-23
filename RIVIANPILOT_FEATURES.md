@@ -12,7 +12,7 @@ Status: implemented and vehicle-validated. Additional branding, countdown clarit
 
 Record locations where the driver corrects lane position and warn on future approaches.
 
-Phase 1 scope is observation, bounded logging, and driver alerts only. It must not change steering commands, lateral control, MADS state, or engagement behavior.
+Phase 1 scope is observation, bounded logging, and driver alerts only. It must not change steering commands, lateral control, MADS state, or engagement behavior. Rich curve snapshots are limited to one every two seconds and record lane/path geometry, lane confidence, actual and desired curvature, driver/EPS/requested/applied steering torque, steering angle/rate, controller saturation, and tracking errors. A diagnostics failure disables only rich logging; location observation and alerts continue.
 
 Status: Phase 1 implementation in development; not yet vehicle-validated.
 
