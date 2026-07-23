@@ -116,7 +116,7 @@ class LaneHuggingObserver:
       pass
 
   @staticmethod
-  def _model_snapshot(model, controls_state, speed_ms: float, CS: structs.CarState | None = None,
+  def _model_snapshot(model, controls_state, speed_ms: float, CS=None,
                       car_control=None, car_output=None) -> dict:
     """Return a compact, defensive lane/curve snapshot for offline analysis."""
     snapshot = {
