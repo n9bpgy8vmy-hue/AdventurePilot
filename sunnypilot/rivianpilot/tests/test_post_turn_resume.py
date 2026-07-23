@@ -12,6 +12,7 @@ def make_params(mocker, observe=True, go_live=True):
   params.get_bool.side_effect = lambda key: {
     "RivianPostTurnObserve": observe,
     "RivianPostTurnGoLive": go_live,
+    "RivianPostTurnRelaxedRoadEdges": False,
     "RivianPilotFeatureLogging": False,
     "IsMetric": False,
   }.get(key, False)
@@ -36,8 +37,23 @@ def car_state(speed_mph=15, left=False, right=False):
   return CS
 
 
-def model(left_prob=0.9, right_prob=0.9):
-  return SimpleNamespace(laneLineProbs=[0.0, left_prob, right_prob, 0.0])
+def model(left_prob=0.9, right_prob=0.9, left_edge=-2.0, right_edge=2.0,
+          left_edge_std=0.2, right_edge_std=0.2, path_y=0.0):
+  line = lambda y: SimpleNamespace(y=[y] * 10)
+  return SimpleNamespace(
+    laneLineProbs=[0.0, left_prob, right_prob, 0.0],
+    roadEdges=[line(left_edge), line(right_edge)],
+    roadEdgeStds=[left_edge_std, right_edge_std],
+    position=line(path_y),
+  )
+
+
+def run_until_resume(feature, CS, lane_model, model_valid=True):
+  for _ in range(round((feature.stable_seconds + feature.resume_delay) / DT_CTRL) + 5):
+    action, _ = feature.update(CS, lane_model, model_valid, False)
+    if action == PostTurnAction.resume:
+      return True
+  return False
 
 
 def test_disabled_never_arms(mocker):
@@ -225,6 +241,49 @@ def test_stable_lane_then_countdown_resumes(mocker):
     raise AssertionError("post-turn MADS did not resume")
 
   assert seen == [3, 2, 1]
+
+
+def test_strict_mode_does_not_resume_on_road_edges_alone(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  feature.update(car_state(right=True), model(), True, True)
+  curb_model = model(left_prob=0.1, right_prob=0.1)
+
+  assert not run_until_resume(feature, car_state(speed_mph=15), curb_model)
+  assert feature.pending
+  assert feature.stable_ticks == 0
+
+
+def test_relaxed_mode_resumes_with_two_confident_edges_and_safe_path(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  feature.relaxed_road_edges = True
+  feature.update(car_state(right=True), model(), True, True)
+  curb_model = model(left_prob=0.1, right_prob=0.1)
+
+  assert run_until_resume(feature, car_state(speed_mph=15), curb_model)
+
+
+def test_relaxed_mode_rejects_single_uncertain_or_implausible_edges(mocker):
+  unsafe_models = [
+    model(left_prob=0.1, right_prob=0.1, left_edge_std=0.7),
+    model(left_prob=0.1, right_prob=0.1, left_edge=-0.5, right_edge=0.5),
+    model(left_prob=0.1, right_prob=0.1, left_edge=-4.0, right_edge=4.0),
+    model(left_prob=0.1, right_prob=0.1, path_y=1.7),
+  ]
+  for unsafe_model in unsafe_models:
+    feature = PostTurnResume(make_params(mocker))
+    feature.relaxed_road_edges = True
+    feature.update(car_state(right=True), model(), True, True)
+    assert not run_until_resume(feature, car_state(speed_mph=15), unsafe_model)
+
+
+def test_relaxed_mode_does_not_use_road_edges_above_turn_speed(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  feature.relaxed_road_edges = True
+  feature.update(car_state(speed_mph=20, right=True), model(), True, True)
+  curb_model = model(left_prob=0.1, right_prob=0.1)
+
+  assert not run_until_resume(feature, car_state(speed_mph=50), curb_model)
+  assert not feature.high_speed_lane_confirmed
 
 
 def test_countdown_resets_when_driver_turns_again(mocker):

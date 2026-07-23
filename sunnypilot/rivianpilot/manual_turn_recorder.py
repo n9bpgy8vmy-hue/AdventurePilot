@@ -21,6 +21,7 @@ PRE_ROLL_SECONDS = 3.0
 POST_TURN_SECONDS = 3.0
 MAX_TURN_SECONDS = 40.0
 MIN_HEADING_CHANGE_DEG = 15.0
+TURN_INTENT_LATCH_SECONDS = 8.0
 MAX_SAMPLES = round((PRE_ROLL_SECONDS + MAX_TURN_SECONDS) / SAMPLE_PERIOD_SECONDS)
 PRE_ROLL_SAMPLES = round(PRE_ROLL_SECONDS / SAMPLE_PERIOD_SECONDS)
 
@@ -63,6 +64,9 @@ class ManualTurnRecorder:
     self.started_at = 0.0
     self.blinker_off_at: float | None = None
     self.manual_steering_seen = False
+    self.intent_direction = ""
+    self.intent_expires_at = 0.0
+    self.last_blinker_direction = ""
     self.get_params()
 
   def _log(self, action: str, **kwargs) -> None:
@@ -320,6 +324,35 @@ class ManualTurnRecorder:
     self.started_at = 0.0
     self.blinker_off_at = None
     self.manual_steering_seen = False
+    self.intent_direction = ""
+    self.intent_expires_at = 0.0
+
+  @staticmethod
+  def _blinker_direction(CS: structs.CarState) -> str:
+    if bool(CS.leftBlinker) == bool(CS.rightBlinker):
+      return ""
+    return "left" if CS.leftBlinker else "right"
+
+  def _capture_turn_intent(self, CS: structs.CarState, now: float) -> None:
+    """Capture short blinker taps at control rate, independently of 5 Hz package sampling."""
+    if CS.gearShifter != structs.CarState.GearShifter.drive:
+      self.intent_direction = ""
+      self.intent_expires_at = 0.0
+      self.last_blinker_direction = ""
+      return
+    direction = self._blinker_direction(CS)
+    if direction and direction != self.last_blinker_direction:
+      previous = self.intent_direction
+      self.intent_direction = direction
+      self.intent_expires_at = now + TURN_INTENT_LATCH_SECONDS
+      if self.active:
+        self.direction = direction
+        self.blinker_off_at = None
+        self._log("turn_intent_extended", package_id=self.turn_id, previous_direction=previous,
+                  direction=direction)
+      else:
+        self._log("turn_intent_latched", direction=direction)
+    self.last_blinker_direction = direction
 
   def _finalize(self, now: float, settled: bool, reason: str) -> None:
     if not self.samples:
@@ -372,6 +405,12 @@ class ManualTurnRecorder:
       self.get_params()
       self._process_delete_requests()
       self.last_params_read = monotonic_now
+    if self.enabled:
+      self._capture_turn_intent(CS, now)
+    else:
+      self.intent_direction = ""
+      self.intent_expires_at = 0.0
+      self.last_blinker_direction = ""
 
     if now - self.last_sample_time < SAMPLE_PERIOD_SECONDS:
       return
@@ -390,10 +429,11 @@ class ManualTurnRecorder:
     under_speed = CS.vEgo <= float(self.max_speed) * speed_factor
 
     if not self.active:
-      if exactly_one_blinker and in_drive and under_speed:
+      intent_valid = bool(self.intent_direction) and now <= self.intent_expires_at
+      if intent_valid and in_drive and under_speed:
         self.active = True
         self.started_at = now
-        self.direction = "left" if CS.leftBlinker else "right"
+        self.direction = self.intent_direction
         self.turn_id = f"{int(now * 1000):013d}-{self.direction}-{uuid.uuid4().hex[:8]}"
         self.samples = list(self.history)
         self.manual_steering_seen = bool(CS.steeringPressed)
@@ -411,7 +451,11 @@ class ManualTurnRecorder:
     elif exactly_one_blinker:
       self.blinker_off_at = None
     else:
-      if self.blinker_off_at is None:
+      # A short tap remains a candidate until manual steering confirms a real
+      # turn or its bounded intent window expires.
+      if not self.manual_steering_seen and now <= self.intent_expires_at:
+        self.blinker_off_at = None
+      elif self.blinker_off_at is None:
         self.blinker_off_at = now
       elif now - self.blinker_off_at >= POST_TURN_SECONDS:
         self._finalize(now, True, "post_turn_complete")

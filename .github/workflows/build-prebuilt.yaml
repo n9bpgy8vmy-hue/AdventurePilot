@@ -126,7 +126,8 @@ jobs:
               sunnypilot/rivianpilot/tests/test_lane_hugging_observer.py \
               sunnypilot/rivianpilot/tests/test_post_turn_resume.py \
               sunnypilot/rivianpilot/tests/test_blind_spot_observer.py \
-              sunnypilot/rivianpilot/tests/test_manual_turn_recorder.py
+              sunnypilot/rivianpilot/tests/test_manual_turn_recorder.py \
+              selfdrive/ui/sunnypilot/onroad/tests/test_curve_confidence.py
 
       - name: Validate RivianPilot Sunnylink settings
         run: |

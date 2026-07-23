@@ -26,6 +26,12 @@ class PostTurnResume:
   YAW_RATE_MAX_RADS = 0.08
   PAUSE_CONFIRMATION_SECONDS = 0.5
   HIGH_SPEED_STABLE_SECONDS = 0.5
+  ROAD_EDGE_STD_MAX = 0.6
+  ROAD_WIDTH_MIN_M = 2.5
+  ROAD_WIDTH_MAX_M = 6.0
+  ROAD_EDGE_MARGIN_M = 0.5
+  PATH_CENTER_TOLERANCE_M = 1.5
+  ROAD_EDGE_SAMPLE_INDEX = 5
 
   def __init__(self, params):
     self.params = params
@@ -49,6 +55,7 @@ class PostTurnResume:
       return
     self.observe_enabled = self.params.get_bool("RivianPostTurnObserve")
     self.go_live = self.params.get_bool("RivianPostTurnGoLive")
+    self.relaxed_road_edges = self.params.get_bool("RivianPostTurnRelaxedRoadEdges")
     self.is_metric = self.params.get_bool("IsMetric")
     self.logging_enabled = self.params.get_bool("RivianPilotFeatureLogging")
     self.max_turn_speed = self.params.get("RivianPostTurnMaxSpeed", return_default=True)
@@ -178,6 +185,42 @@ class PostTurnResume:
                 model.laneLineProbs[1] >= self.LANE_PROB_MIN and
                 model.laneLineProbs[2] >= self.LANE_PROB_MIN)
 
+  def _road_edges_confident(self, model: log.ModelDataV2, model_valid: bool) -> bool:
+    """Require two reliable road edges and a plausible model path between them."""
+    if not model_valid or len(model.roadEdges) < 2 or len(model.roadEdgeStds) < 2:
+      return False
+    if model.roadEdgeStds[0] > self.ROAD_EDGE_STD_MAX or model.roadEdgeStds[1] > self.ROAD_EDGE_STD_MAX:
+      return False
+
+    left_y = model.roadEdges[0].y
+    right_y = model.roadEdges[1].y
+    path_y = model.position.y
+    sample_index = self.ROAD_EDGE_SAMPLE_INDEX
+    if min(len(left_y), len(right_y), len(path_y)) <= sample_index:
+      return False
+
+    left = float(left_y[sample_index])
+    right = float(right_y[sample_index])
+    path = float(path_y[sample_index])
+    if not all(math.isfinite(value) for value in (left, right, path)):
+      return False
+
+    low_edge, high_edge = sorted((left, right))
+    road_width = high_edge - low_edge
+    road_center = (low_edge + high_edge) / 2.0
+    return bool(
+      self.ROAD_WIDTH_MIN_M <= road_width <= self.ROAD_WIDTH_MAX_M and
+      low_edge + self.ROAD_EDGE_MARGIN_M <= path <= high_edge - self.ROAD_EDGE_MARGIN_M and
+      abs(path - road_center) <= self.PATH_CENTER_TOLERANCE_M
+    )
+
+  def _recovery_path(self, model: log.ModelDataV2, model_valid: bool, high_speed_escape: bool) -> str | None:
+    if self._lane_confident(model, model_valid):
+      return "lane_lines"
+    if self.relaxed_road_edges and not high_speed_escape and self._road_edges_confident(model, model_valid):
+      return "road_edges"
+    return None
+
   def _settled_reason(self, CS: structs.CarState) -> str | None:
     if self._one_blinker(CS):
       return "blinker_active"
@@ -200,9 +243,9 @@ class PostTurnResume:
       return settled_reason
     if high_speed_escape and self.high_speed_lane_confirmed:
       return None
-    if not model_valid or len(model.laneLineProbs) < 3:
+    if not model_valid:
       return "model_unavailable"
-    if not self._lane_confident(model, model_valid):
+    if self._recovery_path(model, model_valid, high_speed_escape) is None:
       return "lane_not_stable"
     return None
 
@@ -268,13 +311,14 @@ class PostTurnResume:
       return PostTurnAction.waiting, None
 
     self.last_wait_reason = None
+    recovery_path = self._recovery_path(model, model_valid, high_speed_escape)
     required_stable_seconds = self.HIGH_SPEED_STABLE_SECONDS if high_speed_escape else self.stable_seconds
     required_stable_ticks = max(1, round(required_stable_seconds / DT_CTRL))
     if self.stable_ticks < required_stable_ticks:
       self.stable_ticks += 1
       if self.stable_ticks == required_stable_ticks:
         self._log("lane_stable", CS, stable_seconds=required_stable_seconds,
-                  resume_path="above_turn_speed" if high_speed_escape else "normal")
+                  resume_path="above_turn_speed" if high_speed_escape else recovery_path)
       return PostTurnAction.waiting, None
 
     if not self.live_sequence:
@@ -299,5 +343,5 @@ class PostTurnResume:
       return PostTurnAction.waiting, warning
 
     self._log("resumed", CS, stable_seconds=required_stable_seconds, configured_delay=self.resume_delay,
-              resume_path="above_turn_speed" if high_speed_escape else "normal")
+              resume_path="above_turn_speed" if high_speed_escape else recovery_path)
     return PostTurnAction.resume, warning

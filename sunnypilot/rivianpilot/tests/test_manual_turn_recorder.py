@@ -109,6 +109,27 @@ def test_does_not_save_blinker_without_manual_turn(mocker, tmp_path):
   assert list(tmp_path.glob("*.json")) == []
 
 
+def test_short_blinker_tap_is_latched_until_manual_turn(mocker, tmp_path):
+  params, _ = make_params(mocker)
+  recorder = ManualTurnRecorder(params, str(tmp_path))
+
+  # Capture a tap between the recorder's 5 Hz sample boundaries.
+  update(recorder, car_state(), 1000.0, 0.0)
+  gps, model, controls, car_control, car_output, pose = context(0.0)
+  recorder.update(car_state("right"), gps, model, controls, car_control, car_output, pose, now=1000.05)
+  recorder.update(car_state(), gps, model, controls, car_control, car_output, pose, now=1000.10)
+
+  for tick in range(30):
+    update(recorder, car_state(steering_pressed=True, torque=1.0),
+           1000.2 + tick * 0.2, -tick * 2.0)
+  for tick in range(17):
+    update(recorder, car_state(), 1006.2 + tick * 0.2, -58.0)
+
+  packages = list(tmp_path.glob("*.json"))
+  assert len(packages) == 1
+  assert json.loads(packages[0].read_text())["direction"] == "right"
+
+
 def test_selected_package_delete_is_oldest_first(mocker, tmp_path):
   params, values = make_params(mocker)
   recorder = ManualTurnRecorder(params, str(tmp_path))
