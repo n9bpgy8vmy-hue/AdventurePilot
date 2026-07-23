@@ -121,6 +121,45 @@ def test_above_turn_speed_does_not_change_high_speed_behavior(mocker):
   assert not feature.pending
 
 
+def test_armed_turn_uses_high_speed_escape_without_lane_lines(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  assert feature.update(car_state(speed_mph=20, left=True), model(), True, True)[0] == PostTurnAction.pause
+
+  high_speed = car_state(speed_mph=50)
+  unavailable_model = model(left_prob=0.0, right_prob=0.0)
+  for _ in range(round(feature.HIGH_SPEED_STABLE_SECONDS / DT_CTRL)):
+    action, warning = feature.update(high_speed, unavailable_model, False, False)
+    assert action == PostTurnAction.waiting
+    assert warning is None
+
+  seen = []
+  for _ in range(round(feature.resume_delay / DT_CTRL) + 2):
+    action, warning = feature.update(high_speed, unavailable_model, False, False)
+    if warning is not None:
+      seen.append(warning)
+    if action == PostTurnAction.resume:
+      break
+  else:
+    raise AssertionError("high-speed escape did not resume MADS")
+
+  assert seen == [3, 2, 1]
+
+
+def test_high_speed_escape_still_waits_for_driver_steering(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  assert feature.update(car_state(speed_mph=20, right=True), model(), True, True)[0] == PostTurnAction.pause
+
+  high_speed = car_state(speed_mph=50)
+  high_speed.steeringPressed = True
+  for _ in range(round(feature.HIGH_SPEED_STABLE_SECONDS / DT_CTRL) + 5):
+    action, warning = feature.update(high_speed, model(left_prob=0.0, right_prob=0.0), False, False)
+    assert action == PostTurnAction.waiting
+    assert warning is None
+
+  assert feature.stable_ticks == 0
+  assert feature.countdown == 0.0
+
+
 def test_requires_active_lateral_control_to_arm(mocker):
   feature = PostTurnResume(make_params(mocker))
   action, _ = feature.update(car_state(left=True), model(), True, False)

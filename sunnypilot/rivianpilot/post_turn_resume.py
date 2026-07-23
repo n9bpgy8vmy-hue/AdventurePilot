@@ -25,6 +25,7 @@ class PostTurnResume:
   STEERING_ANGLE_MAX_DEG = 15.0
   YAW_RATE_MAX_RADS = 0.08
   PAUSE_CONFIRMATION_SECONDS = 0.5
+  HIGH_SPEED_STABLE_SECONDS = 0.5
 
   def __init__(self, params):
     self.params = params
@@ -147,7 +148,11 @@ class PostTurnResume:
       CS.vEgo <= self.max_turn_speed * self._speed_factor()
     )
 
-  def _stable_reason(self, CS: structs.CarState, model: log.ModelDataV2, model_valid: bool) -> str | None:
+  def _above_turn_speed(self, CS: structs.CarState) -> bool:
+    return CS.vEgo > self.max_turn_speed * self._speed_factor()
+
+  def _stable_reason(self, CS: structs.CarState, model: log.ModelDataV2, model_valid: bool,
+                     high_speed_escape: bool = False) -> str | None:
     if self._one_blinker(CS):
       return "blinker_active"
     if CS.gearShifter != structs.CarState.GearShifter.drive:
@@ -160,6 +165,11 @@ class PostTurnResume:
       return "steering_not_straight"
     if abs(CS.yawRate) > self.YAW_RATE_MAX_RADS:
       return "yaw_not_settled"
+    # Above the configured pause ceiling, do not hold MADS inactive solely because
+    # painted lane-line confidence is intermittent. Driver input and vehicle motion
+    # must still be settled before warning and resume.
+    if high_speed_escape:
+      return None
     if not model_valid or len(model.laneLineProbs) < 3:
       return "model_unavailable"
     if model.laneLineProbs[1] < self.LANE_PROB_MIN or model.laneLineProbs[2] < self.LANE_PROB_MIN:
@@ -202,7 +212,8 @@ class PostTurnResume:
       return PostTurnAction.waiting, None
     self.pause_confirmation_ticks = 0
 
-    reason = self._stable_reason(CS, model, model_valid)
+    high_speed_escape = self._above_turn_speed(CS)
+    reason = self._stable_reason(CS, model, model_valid, high_speed_escape)
     if reason is not None:
       if reason != self.last_wait_reason:
         self._log("waiting", CS, reason=reason)
@@ -213,11 +224,13 @@ class PostTurnResume:
       return PostTurnAction.waiting, None
 
     self.last_wait_reason = None
-    required_stable_ticks = max(1, round(self.stable_seconds / DT_CTRL))
+    required_stable_seconds = self.HIGH_SPEED_STABLE_SECONDS if high_speed_escape else self.stable_seconds
+    required_stable_ticks = max(1, round(required_stable_seconds / DT_CTRL))
     if self.stable_ticks < required_stable_ticks:
       self.stable_ticks += 1
       if self.stable_ticks == required_stable_ticks:
-        self._log("lane_stable", CS, stable_seconds=self.stable_seconds)
+        self._log("lane_stable", CS, stable_seconds=required_stable_seconds,
+                  resume_path="above_turn_speed" if high_speed_escape else "normal")
       return PostTurnAction.waiting, None
 
     if not self.live_sequence:
@@ -241,5 +254,6 @@ class PostTurnResume:
         warning = second
       return PostTurnAction.waiting, warning
 
-    self._log("resumed", CS, stable_seconds=self.stable_seconds, configured_delay=self.resume_delay)
+    self._log("resumed", CS, stable_seconds=required_stable_seconds, configured_delay=self.resume_delay,
+              resume_path="above_turn_speed" if high_speed_escape else "normal")
     return PostTurnAction.resume, warning
