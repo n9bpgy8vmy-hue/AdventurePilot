@@ -1,12 +1,20 @@
 from types import SimpleNamespace
 
 import pytest
-from cereal import log
+from cereal import log, messaging
 
-from openpilot.selfdrive.ui.sunnypilot.onroad.curve_confidence import (
-  CurveConfidenceInputUnavailable,
-  CurveConfidenceRenderer,
-)
+# Import the visual component without connecting the test worker to the live
+# device's protected msgq sockets. Tests replace ui_state with a deterministic
+# fake before exercising scoring.
+_submaster = messaging.SubMaster
+try:
+  messaging.SubMaster = lambda *args, **kwargs: SimpleNamespace()
+  from openpilot.selfdrive.ui.sunnypilot.onroad.curve_confidence import (
+    CurveConfidenceInputUnavailable,
+    CurveConfidenceRenderer,
+  )
+finally:
+  messaging.SubMaster = _submaster
 
 
 class FakeSubMaster(dict):
