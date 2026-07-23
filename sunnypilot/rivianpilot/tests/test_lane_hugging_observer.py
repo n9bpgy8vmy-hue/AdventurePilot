@@ -1,5 +1,3 @@
-import json
-
 from opendbc.car import structs
 
 from openpilot.common.constants import CV
@@ -15,7 +13,7 @@ def make_params(mocker, locations=None):
     "IsMetric": False,
   }.get(key, False)
   params.get.side_effect = lambda key, **kwargs: {
-    "RivianPilotLaneHuggingLocations": json.dumps(locations or []),
+    "RivianPilotLaneHuggingLocations": locations or [],
     "RivianPilotLaneHuggingMinSpeed": 25,
     "RivianPilotLaneHuggingAlertDistance": 150,
   }[key]
@@ -51,6 +49,44 @@ def test_records_sustained_driver_correction(mocker):
   assert observer.locations[0]["direction"] == "left"
   assert observer.locations[0]["count"] == 1
   params.put.assert_called_once()
+  assert params.put.call_args.args[1] == observer.locations
+
+
+def test_storage_failure_is_suppressed_and_logged_once(mocker):
+  params = make_params(mocker)
+  params.put.side_effect = TypeError("storage type mismatch")
+  log_event = mocker.patch("openpilot.sunnypilot.rivianpilot.lane_hugging_observer.cloudlog.event")
+  observer = LaneHuggingObserver(params)
+  CS = car_state(torque=1.0)
+
+  for _ in range(round(CORRECTION_DURATION_SECONDS / DT_CTRL)):
+    observer.update(CS, lateral_active=True, gps=gps(mocker), now=1000.0)
+
+  assert observer.storage_faulted
+  assert log_event.call_count == 1
+
+  observer._save_locations()
+  assert params.put.call_count == 1
+  assert log_event.call_count == 1
+
+
+def test_native_json_locations_load_without_deserialization(mocker):
+  locations = [{"id": "known", "latitude": 1.0, "longitude": 2.0, "direction": "left"}]
+  observer = LaneHuggingObserver(make_params(mocker, locations))
+  assert observer.locations == locations
+
+
+def test_unexpected_runtime_failure_is_suppressed_once(mocker):
+  observer = LaneHuggingObserver(make_params(mocker))
+  log_event = mocker.patch("openpilot.sunnypilot.rivianpilot.lane_hugging_observer.cloudlog.event")
+
+  observer.suppress_after_error(RuntimeError("test failure"))
+  observer.suppress_after_error(RuntimeError("repeated failure"))
+
+  assert observer.faulted
+  assert not observer.enabled
+  assert observer.update(car_state(), lateral_active=True, gps=gps(mocker), now=1000.0) is None
+  assert log_event.call_count == 1
 
 
 def test_never_records_without_active_lateral_or_with_blinker(mocker):

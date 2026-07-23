@@ -79,7 +79,16 @@ class ModularAssistiveDrivingSystem:
     self.rivian_mads_countdown_ticks = 0
     self.rivian_mads_countdown_delay = 0
     self.rivian_last_config_error = None
-    self.post_turn_resume = PostTurnResume(self.params) if self.CP.brand == "rivian" else None
+    self.post_turn_resume = None
+    if self.CP.brand == "rivian":
+      try:
+        self.post_turn_resume = PostTurnResume(self.params)
+      except Exception as e:
+        try:
+          cloudlog.event("rivianpilot feature error", feature="post_turn_resume",
+                         errors=["initialization_failure_suppressed"], error_type=type(e).__name__)
+        except Exception:
+          pass
     self.post_turn_action = PostTurnAction.none
     self.validate_rivian_mads_config()
 
@@ -96,29 +105,35 @@ class ModularAssistiveDrivingSystem:
     error_signature = tuple(errors) or None
     if error_signature is not None and error_signature != self.rivian_last_config_error:
       # Safety/configuration errors are always recorded, independent of the optional diagnostics toggle.
-      cloudlog.event(
-        "rivianpilot feature error",
-        feature="mads_reverse_resume",
-        errors=errors,
-        resume_speed=self.rivian_mads_auto_resume_speed,
-        resume_delay=self.rivian_mads_resume_delay,
-      )
+      try:
+        cloudlog.event(
+          "rivianpilot feature error",
+          feature="mads_reverse_resume",
+          errors=errors,
+          resume_speed=self.rivian_mads_auto_resume_speed,
+          resume_delay=self.rivian_mads_resume_delay,
+        )
+      except Exception:
+        pass
     self.rivian_last_config_error = error_signature
 
   def log_rivian_mads_resume(self, action: str, CS: structs.CarState, **kwargs) -> None:
     if not self.rivianpilot_feature_logging:
       return
 
-    cloudlog.event(
-      "rivian mads reverse resume",
-      action=action,
-      gear=str(CS.gearShifter),
-      speed_ms=round(CS.vEgo, 3),
-      threshold=self.rivian_mads_auto_resume_speed,
-      is_metric=self.is_metric,
-      configured_delay=self.rivian_mads_resume_delay,
-      **kwargs,
-    )
+    try:
+      cloudlog.event(
+        "rivian mads reverse resume",
+        action=action,
+        gear=str(CS.gearShifter),
+        speed_ms=round(CS.vEgo, 3),
+        threshold=self.rivian_mads_auto_resume_speed,
+        is_metric=self.is_metric,
+        configured_delay=self.rivian_mads_resume_delay,
+        **kwargs,
+      )
+    except Exception:
+      self.rivianpilot_feature_logging = False
 
   def arm_rivian_reverse_resume(self, CS: structs.CarState, source: str) -> None:
     if not self.rivian_reverse_resume_pending:
@@ -147,21 +162,29 @@ class ModularAssistiveDrivingSystem:
     self.rivian_mads_resume_delay = self.params.get("RivianMadsResumeDelay", return_default=True)
     self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
     if self.post_turn_resume is not None:
-      self.post_turn_resume.read_params()
+      try:
+        self.post_turn_resume.read_params()
+      except Exception as e:
+        self.post_turn_action = PostTurnAction.none
+        self.post_turn_resume.suppress_after_error(e)
     self.validate_rivian_mads_config()
 
   def update_post_turn_resume(self, CS: structs.CarState) -> None:
-    if self.post_turn_resume is None:
+    if self.post_turn_resume is None or self.post_turn_resume.faulted:
       return
 
-    model_valid = self.selfdrive.sm.valid['modelV2'] and self.selfdrive.sm.recv_frame['modelV2'] > 0
-    self.post_turn_action, warning_second = self.post_turn_resume.update(
-      CS, self.selfdrive.sm['modelV2'], model_valid, self.active,
-    )
-    if warning_second is not None:
-      self.events_sp.add(RIVIAN_MADS_RESUME_WARNING_EVENTS[warning_second])
-    if self.post_turn_action == PostTurnAction.pause:
-      self.transition_paused_state()
+    try:
+      model_valid = self.selfdrive.sm.valid['modelV2'] and self.selfdrive.sm.recv_frame['modelV2'] > 0
+      self.post_turn_action, warning_second = self.post_turn_resume.update(
+        CS, self.selfdrive.sm['modelV2'], model_valid, self.active,
+      )
+      if warning_second is not None:
+        self.events_sp.add(RIVIAN_MADS_RESUME_WARNING_EVENTS[warning_second])
+      if self.post_turn_action == PostTurnAction.pause:
+        self.transition_paused_state()
+    except Exception as e:
+      self.post_turn_action = PostTurnAction.none
+      self.post_turn_resume.suppress_after_error(e)
 
   def pedal_pressed_non_gas_pressed(self, CS: structs.CarState) -> bool:
     # ignore `pedalPressed` events caused by gas presses

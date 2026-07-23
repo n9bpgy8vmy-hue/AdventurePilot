@@ -97,6 +97,19 @@ def test_post_turn_ready_allows_silent_resume(mocker):
   assert mads.should_silent_lkas_enable(car_state(20))
 
 
+def test_post_turn_runtime_error_is_contained(mocker):
+  mads = make_mads(mocker)
+  mads.post_turn_resume.update = mocker.MagicMock(side_effect=RuntimeError("test failure"))
+  mads.post_turn_resume.suppress_after_error = mocker.MagicMock()
+  mads.selfdrive.sm.valid.__getitem__.return_value = True
+  mads.selfdrive.sm.recv_frame.__getitem__.return_value = 1
+
+  mads.update_post_turn_resume(car_state(20))
+
+  assert mads.post_turn_action == PostTurnAction.none
+  mads.post_turn_resume.suppress_after_error.assert_called_once()
+
+
 def test_metric_selection_uses_kph(mocker):
   mads = make_mads(mocker)
   mads.rivian_reverse_resume_pending = True

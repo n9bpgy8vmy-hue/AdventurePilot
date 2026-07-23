@@ -40,6 +40,10 @@ class LaneHuggingObserver:
     self.is_metric = False
     self.min_speed = 25
     self.alert_distance = 150
+    self.faulted = False
+    self.error_logged = False
+    self.storage_faulted = False
+    self.storage_error_logged = False
     self.locations = self._load_locations()
     self.correction_ticks = 0
     self.correction_latched = False
@@ -51,11 +55,29 @@ class LaneHuggingObserver:
   def _load_locations(self) -> list[dict]:
     try:
       raw = self.params.get("RivianPilotLaneHuggingLocations")
-      locations = json.loads(raw) if raw else []
+      if isinstance(raw, (str, bytes)):
+        locations = json.loads(raw)
+      else:
+        locations = raw if raw else []
       return locations[-MAX_LOCATIONS:] if isinstance(locations, list) else []
-    except (TypeError, ValueError, json.JSONDecodeError):
-      cloudlog.event("rivianpilot feature error", feature="lane_hugging_observer", errors=["invalid_location_database"])
+    except Exception as e:
+      self._record_error_once("invalid_location_database", e)
       return []
+
+  def _record_error_once(self, error: str, exception: Exception) -> None:
+    if getattr(self, "storage_error_logged", False):
+      return
+    self.storage_error_logged = True
+    try:
+      cloudlog.event(
+        "rivianpilot feature error",
+        feature="lane_hugging_observer",
+        errors=[error],
+        error_type=type(exception).__name__,
+      )
+    except Exception:
+      # Logging must never be able to terminate selfdrived.
+      pass
 
   def get_params(self) -> None:
     self.enabled = self.params.get_bool("RivianPilotLaneHuggingObserver")
@@ -66,11 +88,41 @@ class LaneHuggingObserver:
 
   def _log(self, action: str, **kwargs) -> None:
     if self.feature_logging:
-      cloudlog.event("rivianpilot lane hugging observer", action=action, **kwargs)
+      try:
+        cloudlog.event("rivianpilot lane hugging observer", action=action, **kwargs)
+      except Exception:
+        # Optional diagnostics must never affect selfdrived.
+        self.feature_logging = False
+
+  def suppress_after_error(self, exception: Exception) -> None:
+    """Disable the observer for this process after an unexpected runtime failure."""
+    self.faulted = True
+    self.enabled = False
+    self.correction_ticks = 0
+    self.correction_latched = False
+    if self.error_logged:
+      return
+    self.error_logged = True
+    try:
+      cloudlog.event(
+        "rivianpilot feature error",
+        feature="lane_hugging_observer",
+        errors=["runtime_failure_suppressed"],
+        error_type=type(exception).__name__,
+      )
+    except Exception:
+      pass
 
   def _save_locations(self) -> None:
+    if self.storage_faulted:
+      return
     self.locations = sorted(self.locations, key=lambda point: point.get("last_seen", 0))[-MAX_LOCATIONS:]
-    self.params.put("RivianPilotLaneHuggingLocations", json.dumps(self.locations, separators=(",", ":")), block=False)
+    try:
+      # JSON Params accept native Python JSON values; serializing first causes a type mismatch.
+      self.params.put("RivianPilotLaneHuggingLocations", self.locations, block=False)
+    except Exception as e:
+      self.storage_faulted = True
+      self._record_error_once("location_save_failed", e)
 
   def _record_correction(self, latitude: float, longitude: float, direction: str, now: float, speed_ms: float) -> None:
     nearest = None
@@ -97,8 +149,9 @@ class LaneHuggingObserver:
     nearest["count"] = int(nearest.get("count", 0)) + 1
     nearest["last_seen"] = now
     self._save_locations()
-    self._log("correction_recorded", direction=direction, latitude=latitude, longitude=longitude,
-              speed_ms=round(speed_ms, 3), observations=nearest["count"])
+    if not self.storage_faulted:
+      self._log("correction_recorded", direction=direction, latitude=latitude, longitude=longitude,
+                speed_ms=round(speed_ms, 3), observations=nearest["count"])
 
   def _approach_alert(self, latitude: float, longitude: float, now: float) -> str | None:
     if now - self.last_approach_check < APPROACH_CHECK_PERIOD_SECONDS:
@@ -128,6 +181,8 @@ class LaneHuggingObserver:
     return nearest["direction"]
 
   def update(self, CS: structs.CarState, lateral_active: bool, gps, now: float | None = None) -> str | None:
+    if self.faulted:
+      return None
     now = time.time() if now is None else now
     monotonic_now = time.monotonic()
     if monotonic_now - self.last_params_read > 10.0:

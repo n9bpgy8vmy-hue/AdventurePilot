@@ -62,9 +62,14 @@ class ControlsExt(ModelStateBase):
 
   def get_lat_active(self, sm: messaging.SubMaster) -> bool:
     mads = sm['selfdriveStateSP'].mads
-    rivian_post_turn_handles_pause = self.CP.brand == "rivian" and self.rivian_post_turn_observe and \
-      self.rivian_post_turn_go_live and mads.available
-    if not rivian_post_turn_handles_pause and self.blinker_pause_lateral.update(sm['carState']):
+    rivian_live_paused = self.CP.brand == "rivian" and self.rivian_post_turn_go_live and \
+      mads.available and not mads.active
+
+    # Keep native blinker pause as the fail-safe until Feature 4 has actually paused MADS.
+    # Once paused, discard its independent reengagement timer so Feature 4 owns guarded resume.
+    if rivian_live_paused:
+      self.blinker_pause_lateral.blinker_off_timer = 0.0
+    elif self.blinker_pause_lateral.update(sm['carState']):
       return False
 
     if mads.available:

@@ -256,7 +256,7 @@
               "key": "RivianPostTurnObserve",
               "widget": "toggle",
               "title": "Observe Post-Turn Resume",
-              "description": "Record when RivianPilot would pause and resume around a qualifying manual turn. Observation never changes steering or MADS. RivianPilot Feature Diagnostics must be enabled.",
+              "description": "Record when RivianPilot would pause and resume around a qualifying manual turn. Observation never changes steering or MADS.",
               "visibility": [
                 {
                   "type": "capability",
@@ -267,11 +267,6 @@
               "enablement": [
                 {
                   "type": "offroad_only"
-                },
-                {
-                  "type": "param",
-                  "key": "RivianPilotFeatureLogging",
-                  "equals": true
                 }
               ]
             },
@@ -279,7 +274,7 @@
               "key": "RivianPostTurnGoLive",
               "widget": "toggle",
               "title": "Go Live with Post-Turn Resume",
-              "description": "Activate the observed behavior. Pauses MADS for qualifying signaled low-speed turns, confirms a stable lane, warns, and resumes. Default is off.",
+              "description": "Independently activate post-turn control. Native blinker pause remains the fallback until RivianPilot confirms MADS is paused. Default is off.",
               "visibility": [
                 {
                   "type": "capability",
@@ -290,11 +285,6 @@
               "enablement": [
                 {
                   "type": "offroad_only"
-                },
-                {
-                  "type": "param",
-                  "key": "RivianPostTurnObserve",
-                  "equals": true
                 }
               ]
             },
@@ -316,13 +306,6 @@
                   "field": "brand",
                   "equals": "rivian"
                 }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPostTurnObserve",
-                  "equals": true
-                }
               ]
             },
             {
@@ -343,13 +326,6 @@
                   "field": "brand",
                   "equals": "rivian"
                 }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPostTurnObserve",
-                  "equals": true
-                }
               ]
             },
             {
@@ -367,13 +343,6 @@
                   "field": "brand",
                   "equals": "rivian"
                 }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPostTurnObserve",
-                  "equals": true
-                }
               ]
             },
             {
@@ -390,13 +359,6 @@
                   "type": "capability",
                   "field": "brand",
                   "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPostTurnObserve",
-                  "equals": true
                 }
               ]
             }

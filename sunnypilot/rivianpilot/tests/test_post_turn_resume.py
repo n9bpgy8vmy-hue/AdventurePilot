@@ -60,6 +60,45 @@ def test_observe_only_tracks_without_control_change(mocker):
 def test_go_live_without_observe_fails_safe(mocker):
   feature = PostTurnResume(make_params(mocker, observe=False, go_live=True))
   action, warning = feature.update(car_state(left=True), model(), True, True)
+  assert action == PostTurnAction.pause
+  assert warning is None
+  assert feature.pending
+
+
+def test_runtime_failure_can_be_suppressed_without_raising(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  log_event = mocker.patch("openpilot.sunnypilot.rivianpilot.post_turn_resume.cloudlog.event")
+
+  feature.suppress_after_error(RuntimeError("test failure"))
+  feature.suppress_after_error(RuntimeError("repeated failure"))
+
+  assert feature.faulted
+  assert not feature.pending
+  assert feature.update(car_state(left=True), model(), True, True)[0] == PostTurnAction.none
+  assert log_event.call_count == 1
+
+
+def test_live_mode_suppresses_itself_if_mads_pause_is_not_confirmed(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  log_event = mocker.patch("openpilot.sunnypilot.rivianpilot.post_turn_resume.cloudlog.event")
+  CS = car_state(left=True)
+
+  assert feature.update(CS, model(), True, True)[0] == PostTurnAction.pause
+  for _ in range(round(feature.PAUSE_CONFIRMATION_SECONDS / DT_CTRL)):
+    feature.update(CS, model(), True, True)
+
+  assert feature.faulted
+  assert not feature.pending
+  assert log_event.call_args.kwargs["errors"] == ["pause_not_confirmed"]
+
+
+def test_disabling_go_live_cancels_active_sequence(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  assert feature.update(car_state(left=True), model(), True, True)[0] == PostTurnAction.pause
+
+  feature.go_live = False
+  action, warning = feature.update(car_state(), model(), True, False)
+
   assert action == PostTurnAction.none
   assert warning is None
   assert not feature.pending

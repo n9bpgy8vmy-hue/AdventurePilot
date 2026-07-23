@@ -173,7 +173,17 @@ class SelfdriveD(CruiseHelper):
     self.events_sp_prev = []
 
     self.mads = ModularAssistiveDrivingSystem(self)
-    self.lane_hugging_observer = LaneHuggingObserver(self.params) if self.CP.brand == "rivian" else None
+    self.lane_hugging_observer = None
+    if self.CP.brand == "rivian":
+      try:
+        self.lane_hugging_observer = LaneHuggingObserver(self.params)
+      except Exception as e:
+        # Experimental observers must not prevent selfdrived from starting.
+        try:
+          cloudlog.event("rivianpilot feature error", feature="lane_hugging_observer",
+                         errors=["initialization_failure_suppressed"], error_type=type(e).__name__)
+        except Exception:
+          pass
     self.icbm = IntelligentCruiseButtonManagement(self.CP, self.CP_SP)
 
     self.car_events_sp = CarSpecificEventsSP(self.CP, self.CP_SP)
@@ -465,12 +475,15 @@ class SelfdriveD(CruiseHelper):
     self.distance_traveled += abs(CS.vEgo) * DT_CTRL
 
     if self.lane_hugging_observer is not None:
-      gps = self.sm[self.gps_location_service] if gps_ok else None
-      correction_direction = self.lane_hugging_observer.update(CS, self.sm['carControl'].latActive, gps)
-      if correction_direction == "left":
-        self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadLeft)
-      elif correction_direction == "right":
-        self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadRight)
+      try:
+        gps = self.sm[self.gps_location_service] if gps_ok else None
+        correction_direction = self.lane_hugging_observer.update(CS, self.sm['carControl'].latActive, gps)
+        if correction_direction == "left":
+          self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadLeft)
+        elif correction_direction == "right":
+          self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadRight)
+      except Exception as e:
+        self.lane_hugging_observer.suppress_after_error(e)
 
     # TODO: fix simulator
     if not SIMULATION or REPLAY:

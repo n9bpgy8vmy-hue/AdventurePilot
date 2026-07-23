@@ -24,6 +24,7 @@ class PostTurnResume:
   LANE_PROB_MIN = 0.5
   STEERING_ANGLE_MAX_DEG = 15.0
   YAW_RATE_MAX_RADS = 0.08
+  PAUSE_CONFIRMATION_SECONDS = 0.5
 
   def __init__(self, params):
     self.params = params
@@ -35,9 +36,14 @@ class PostTurnResume:
     self.live_sequence = False
     self.last_wait_reason = None
     self.last_config_error = None
+    self.faulted = False
+    self.error_logged = False
+    self.pause_confirmation_ticks = 0
     self.read_params()
 
   def read_params(self) -> None:
+    if self.faulted:
+      return
     self.observe_enabled = self.params.get_bool("RivianPostTurnObserve")
     self.go_live = self.params.get_bool("RivianPostTurnGoLive")
     self.is_metric = self.params.get_bool("IsMetric")
@@ -60,36 +66,60 @@ class PostTurnResume:
       errors.append("stable_seconds_out_of_range")
     if not 1 <= self.resume_delay <= 5:
       errors.append("resume_delay_out_of_range")
-    if self.go_live and not self.observe_enabled:
-      errors.append("go_live_requires_observe")
-
     signature = tuple(errors) or None
     if signature is not None and signature != self.last_config_error:
-      cloudlog.event(
-        "rivianpilot feature error",
-        feature="post_turn_resume",
-        errors=errors,
-        max_turn_speed=self.max_turn_speed,
-        min_resume_speed=self.min_resume_speed,
-        stable_seconds=self.stable_seconds,
-        resume_delay=self.resume_delay,
-        observe_enabled=self.observe_enabled,
-        go_live=self.go_live,
-      )
+      try:
+        cloudlog.event(
+          "rivianpilot feature error",
+          feature="post_turn_resume",
+          errors=errors,
+          max_turn_speed=self.max_turn_speed,
+          min_resume_speed=self.min_resume_speed,
+          stable_seconds=self.stable_seconds,
+          resume_delay=self.resume_delay,
+          observe_enabled=self.observe_enabled,
+          go_live=self.go_live,
+        )
+      except Exception:
+        pass
     self.last_config_error = signature
 
   def _log(self, action: str, CS: structs.CarState, **kwargs) -> None:
     if not self.logging_enabled:
       return
-    cloudlog.event(
-      "rivian mads post turn resume",
-      action=action,
-      direction=self.direction,
-      speed_ms=round(CS.vEgo, 3),
-      steering_angle_deg=round(CS.steeringAngleDeg, 2),
-      yaw_rate=round(CS.yawRate, 3),
-      **kwargs,
-    )
+    try:
+      cloudlog.event(
+        "rivian mads post turn resume",
+        action=action,
+        direction=self.direction,
+        speed_ms=round(CS.vEgo, 3),
+        steering_angle_deg=round(CS.steeringAngleDeg, 2),
+        yaw_rate=round(CS.yawRate, 3),
+        **kwargs,
+      )
+    except Exception:
+      # Diagnostics are optional and must never affect lateral control.
+      self.logging_enabled = False
+
+  def suppress_after_error(self, exception: Exception, error: str = "runtime_failure_suppressed") -> None:
+    """Disable this feature for the current process after an unexpected failure."""
+    self.faulted = True
+    self.pending = False
+    self.live_sequence = False
+    self.stable_ticks = 0
+    self.countdown = 0.0
+    if self.error_logged:
+      return
+    self.error_logged = True
+    try:
+      cloudlog.event(
+        "rivianpilot feature error",
+        feature="post_turn_resume",
+        errors=[error],
+        error_type=type(exception).__name__,
+      )
+    except Exception:
+      pass
 
   def reset(self, CS: structs.CarState | None = None, reason: str | None = None) -> None:
     if self.pending and CS is not None and reason is not None:
@@ -101,6 +131,7 @@ class PostTurnResume:
     self.direction = "none"
     self.live_sequence = False
     self.last_wait_reason = None
+    self.pause_confirmation_ticks = 0
 
   def _speed_factor(self) -> float:
     return CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
@@ -111,7 +142,7 @@ class PostTurnResume:
 
   def _arm_condition(self, CS: structs.CarState, lateral_active: bool) -> bool:
     return bool(
-      self.observe_enabled and lateral_active and self._one_blinker(CS) and
+      (self.observe_enabled or self.go_live) and lateral_active and self._one_blinker(CS) and
       CS.gearShifter == structs.CarState.GearShifter.drive and
       CS.vEgo <= self.max_turn_speed * self._speed_factor()
     )
@@ -138,9 +169,13 @@ class PostTurnResume:
   def update(self, CS: structs.CarState, model: log.ModelDataV2, model_valid: bool,
              lateral_active: bool) -> tuple[PostTurnAction, int | None]:
     """Return state action plus an optional countdown warning second."""
-    if not self.observe_enabled or (self.go_live and self.last_config_error is not None):
+    if self.faulted or (not self.observe_enabled and not self.go_live) or (self.go_live and self.last_config_error is not None):
       if self.pending:
         self.reset(CS, "disabled")
+      return PostTurnAction.none, None
+
+    if self.pending and self.live_sequence and not self.go_live:
+      self.reset(CS, "go_live_disabled")
       return PostTurnAction.none, None
 
     if not self.pending:
@@ -149,6 +184,7 @@ class PostTurnResume:
       self.pending = True
       self.live_sequence = self.go_live
       self.direction = "left" if CS.leftBlinker else "right"
+      self.pause_confirmation_ticks = 0
       self._log("armed", CS, max_turn_speed=self.max_turn_speed, mode="live" if self.live_sequence else "observe")
       return (PostTurnAction.pause if self.live_sequence else PostTurnAction.none), None
 
@@ -157,6 +193,14 @@ class PostTurnResume:
     if CS.gearShifter != structs.CarState.GearShifter.drive:
       self.reset(CS, "left_drive")
       return PostTurnAction.none, None
+
+    if self.live_sequence and lateral_active:
+      self.pause_confirmation_ticks += 1
+      if self.pause_confirmation_ticks * DT_CTRL >= self.PAUSE_CONFIRMATION_SECONDS:
+        self.suppress_after_error(RuntimeError("MADS pause was not confirmed"), "pause_not_confirmed")
+        return PostTurnAction.none, None
+      return PostTurnAction.waiting, None
+    self.pause_confirmation_ticks = 0
 
     reason = self._stable_reason(CS, model, model_valid)
     if reason is not None:
