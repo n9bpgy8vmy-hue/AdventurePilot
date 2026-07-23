@@ -121,13 +121,27 @@ def test_above_turn_speed_does_not_change_high_speed_behavior(mocker):
   assert not feature.pending
 
 
-def test_armed_turn_uses_high_speed_escape_without_lane_lines(mocker):
+def test_armed_turn_requires_lane_confidence_once_then_latches(mocker):
   feature = PostTurnResume(make_params(mocker))
   assert feature.update(car_state(speed_mph=20, left=True), model(), True, True)[0] == PostTurnAction.pause
 
   high_speed = car_state(speed_mph=50)
   unavailable_model = model(left_prob=0.0, right_prob=0.0)
-  for _ in range(round(feature.HIGH_SPEED_STABLE_SECONDS / DT_CTRL)):
+  for _ in range(round(feature.HIGH_SPEED_STABLE_SECONDS / DT_CTRL) + 5):
+    action, warning = feature.update(high_speed, unavailable_model, False, False)
+    assert action == PostTurnAction.waiting
+    assert warning is None
+  assert not feature.high_speed_lane_confirmed
+  assert feature.stable_ticks == 0
+
+  # One valid, confident model sample latches lane confidence for this sequence.
+  action, warning = feature.update(high_speed, model(), True, False)
+  assert action == PostTurnAction.waiting
+  assert warning is None
+  assert feature.high_speed_lane_confirmed
+
+  # Subsequent confidence flicker must not restart confirmation or the countdown.
+  for _ in range(round(feature.HIGH_SPEED_STABLE_SECONDS / DT_CTRL) - 1):
     action, warning = feature.update(high_speed, unavailable_model, False, False)
     assert action == PostTurnAction.waiting
     assert warning is None
@@ -150,6 +164,8 @@ def test_high_speed_escape_still_waits_for_driver_steering(mocker):
   assert feature.update(car_state(speed_mph=20, right=True), model(), True, True)[0] == PostTurnAction.pause
 
   high_speed = car_state(speed_mph=50)
+  feature.update(high_speed, model(), True, False)
+  assert feature.high_speed_lane_confirmed
   high_speed.steeringPressed = True
   for _ in range(round(feature.HIGH_SPEED_STABLE_SECONDS / DT_CTRL) + 5):
     action, warning = feature.update(high_speed, model(left_prob=0.0, right_prob=0.0), False, False)

@@ -40,6 +40,7 @@ class PostTurnResume:
     self.faulted = False
     self.error_logged = False
     self.pause_confirmation_ticks = 0
+    self.high_speed_lane_confirmed = False
     self.read_params()
 
   def read_params(self) -> None:
@@ -133,6 +134,7 @@ class PostTurnResume:
     self.live_sequence = False
     self.last_wait_reason = None
     self.pause_confirmation_ticks = 0
+    self.high_speed_lane_confirmed = False
 
   def _speed_factor(self) -> float:
     return CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
@@ -151,8 +153,12 @@ class PostTurnResume:
   def _above_turn_speed(self, CS: structs.CarState) -> bool:
     return CS.vEgo > self.max_turn_speed * self._speed_factor()
 
-  def _stable_reason(self, CS: structs.CarState, model: log.ModelDataV2, model_valid: bool,
-                     high_speed_escape: bool = False) -> str | None:
+  def _lane_confident(self, model: log.ModelDataV2, model_valid: bool) -> bool:
+    return bool(model_valid and len(model.laneLineProbs) >= 3 and
+                model.laneLineProbs[1] >= self.LANE_PROB_MIN and
+                model.laneLineProbs[2] >= self.LANE_PROB_MIN)
+
+  def _settled_reason(self, CS: structs.CarState) -> str | None:
     if self._one_blinker(CS):
       return "blinker_active"
     if CS.gearShifter != structs.CarState.GearShifter.drive:
@@ -165,14 +171,18 @@ class PostTurnResume:
       return "steering_not_straight"
     if abs(CS.yawRate) > self.YAW_RATE_MAX_RADS:
       return "yaw_not_settled"
-    # Above the configured pause ceiling, do not hold MADS inactive solely because
-    # painted lane-line confidence is intermittent. Driver input and vehicle motion
-    # must still be settled before warning and resume.
-    if high_speed_escape:
+    return None
+
+  def _stable_reason(self, CS: structs.CarState, model: log.ModelDataV2, model_valid: bool,
+                     high_speed_escape: bool = False) -> str | None:
+    settled_reason = self._settled_reason(CS)
+    if settled_reason is not None:
+      return settled_reason
+    if high_speed_escape and self.high_speed_lane_confirmed:
       return None
     if not model_valid or len(model.laneLineProbs) < 3:
       return "model_unavailable"
-    if model.laneLineProbs[1] < self.LANE_PROB_MIN or model.laneLineProbs[2] < self.LANE_PROB_MIN:
+    if not self._lane_confident(model, model_valid):
       return "lane_not_stable"
     return None
 
@@ -213,6 +223,11 @@ class PostTurnResume:
     self.pause_confirmation_ticks = 0
 
     high_speed_escape = self._above_turn_speed(CS)
+    if high_speed_escape and not self.high_speed_lane_confirmed and self._settled_reason(CS) is None and \
+       self._lane_confident(model, model_valid):
+      self.high_speed_lane_confirmed = True
+      self._log("lane_confidence_latched", CS, lane_probability_left=round(model.laneLineProbs[1], 3),
+                lane_probability_right=round(model.laneLineProbs[2], 3))
     reason = self._stable_reason(CS, model, model_valid, high_speed_escape)
     if reason is not None:
       if reason != self.last_wait_reason:
