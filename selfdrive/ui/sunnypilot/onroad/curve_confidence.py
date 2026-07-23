@@ -1,4 +1,3 @@
-import math
 import time
 
 import pyray as rl
@@ -6,12 +5,12 @@ from cereal import log
 
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.sunnypilot.rivianpilot.curve_confidence import (
+  CurveConfidenceInputUnavailable,
+  calculate_curve_confidence,
+)
 from openpilot.system.ui.lib.application import FONT_SCALE, FontWeight, gui_app
 from openpilot.system.ui.lib.text_measure import measure_text_cached
-
-
-class CurveConfidenceInputUnavailable(Exception):
-  pass
 
 
 class CurveConfidenceRenderer:
@@ -21,7 +20,6 @@ class CurveConfidenceRenderer:
   RED_ENTER = 40.0
   YELLOW_EXIT = 75.0
   RED_EXIT = 50.0
-  CURVE_LAT_ACCEL_MIN = 0.35
   YELLOW_HOLD_SECONDS = 0.5
   RED_HOLD_SECONDS = 0.3
   RECOVERY_SECONDS = 2.0
@@ -40,17 +38,6 @@ class CurveConfidenceRenderer:
     self._faulted = False
     self._error_logged = False
     self._was_started = False
-
-  @staticmethod
-  def _finite(value) -> float:
-    value = float(value)
-    if not math.isfinite(value):
-      raise CurveConfidenceInputUnavailable("non-finite curve confidence input")
-    return value
-
-  @staticmethod
-  def _clip(value: float, low: float = 0.0, high: float = 1.0) -> float:
-    return max(low, min(high, value))
 
   def _record_error_once(self, error: str, exception: Exception) -> None:
     if self._error_logged:
@@ -81,58 +68,14 @@ class CurveConfidenceRenderer:
     car_state = sm["carState"]
     calibration = sm["liveCalibration"]
 
-    desired_curvature = self._finite(controls.desiredCurvature)
-    actual_curvature = self._finite(controls.curvature)
-    speed = max(self._finite(car_state.vEgo), 0.0)
-    desired_lat_accel = abs(desired_curvature) * speed * speed
-    actual_lat_accel = abs(actual_curvature) * speed * speed
-    in_curve = max(desired_lat_accel, actual_lat_accel) >= self.CURVE_LAT_ACCEL_MIN
-
-    lane_probs = [self._finite(v) for v in model.laneLineProbs]
-    if len(lane_probs) < 3:
-      raise CurveConfidenceInputUnavailable("lane confidence unavailable")
-    lane_quality = self._clip((lane_probs[1] + lane_probs[2]) / 2.0)
-
-    edge_stds = [abs(self._finite(v)) for v in model.roadEdgeStds]
-    if len(edge_stds) < 2:
-      raise CurveConfidenceInputUnavailable("road edge confidence unavailable")
-    edge_quality = 1.0 - self._clip((edge_stds[0] + edge_stds[1]) / 2.0)
-
-    path_y = [self._finite(v) for v in model.position.y]
-    if len(path_y) < 6:
-      raise CurveConfidenceInputUnavailable("model path unavailable")
-    path_sample = path_y[min(10, len(path_y) - 1)]
-    path_quality = 1.0 if self._previous_path_y is None else 1.0 - self._clip(abs(path_sample - self._previous_path_y))
-    self._previous_path_y = path_sample
-
-    curvature_scale = max(abs(desired_curvature), 0.002)
-    tracking_quality = 1.0 - self._clip(abs(desired_curvature - actual_curvature) / curvature_scale)
-
-    saturated = False
-    try:
-      lateral_state = controls.lateralControlState
-      lateral_log = getattr(lateral_state, lateral_state.which())
-      saturated = bool(getattr(lateral_log, "saturated", False))
-    except Exception:
-      saturated = False
-
-    calibration_quality = 1.0 if calibration.calStatus == log.LiveCalibrationData.Status.calibrated else 0.0
-    driver_penalty = 10.0 if car_state.steeringPressed and abs(self._finite(car_state.steeringTorque)) > 1.0 else 0.0
-    score = (
-      lane_quality * 25.0 +
-      edge_quality * 15.0 +
-      path_quality * 20.0 +
-      tracking_quality * 20.0 +
-      (0.0 if saturated else 10.0) +
-      calibration_quality * 10.0 -
-      driver_penalty
+    score, in_curve, reason, path_sample = calculate_curve_confidence(
+      model, controls, car_state,
+      calibration.calStatus == log.LiveCalibrationData.Status.calibrated,
+      self._previous_path_y,
     )
-    immediate_red = saturated and tracking_quality < 0.35
-    reason = "controller tracking" if immediate_red else \
-             "lane and path confidence" if lane_quality < 0.5 and edge_quality < 0.5 else \
-             "curve prediction"
+    self._previous_path_y = path_sample
     self._last_model_frame = model_frame
-    self._latest_result = (max(0.0, min(100.0, score)), in_curve, reason)
+    self._latest_result = (score, in_curve, reason)
     return self._latest_result
 
   def update(self) -> None:
