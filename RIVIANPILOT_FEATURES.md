@@ -61,6 +61,30 @@ Safety boundaries:
 
 Status: Phase 0 blind-spot observer implemented for bounded diagnostics; not yet vehicle-validated. Remaining phases are roadmap only and are not approved for control-affecting use.
 
+## Feature 6 — Manual-turn learning recorder
+
+Record repeatable driver-executed turns when a single blinker is active so future development can compare the human trajectory with the model-predicted path.
+
+Planned observation data:
+
+- GPS location, approach heading, and turn direction.
+- Relative trajectory from live pose before, during, and after the turn.
+- Speed, acceleration, yaw rate, curvature, steering angle/rate, and driver torque.
+- Requested/applied steering output, model path, lane confidence, and post-turn lane stability.
+- Repetition count and trajectory variation for the same location, approach, and direction.
+
+Safety boundaries:
+
+- Observation only; it must not change steering, MADS, speed, or engagement.
+- Never replay a raw GPS or steering trajectory.
+- A recorded location must not imply turn intent; navigation intent and strong localization would be required for any future assistance.
+- Use bounded, rotated diagnostics and group repeated observations instead of retaining unlimited raw samples.
+- Store each qualifying turn as a separate, bounded package with individual, oldest, and all-package removal controls.
+- Treat the package confidence score only as recording-quality/completeness evidence, never as an automation-safety score.
+- Any warning or control-affecting phase requires separate approval, replay analysis, and vehicle validation.
+
+Status: Phase 1 observation-only package recorder in development; not yet vehicle-validated. Assistance and vehicle-control phases remain on hold and are not approved.
+
 ## Diagnostics policy
 
 - Every implemented RivianPilot feature must include bounded, transition-based diagnostics for effectiveness analysis.
