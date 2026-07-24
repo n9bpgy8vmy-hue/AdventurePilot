@@ -27,6 +27,10 @@ sections:
   - key: QuietMode
     widget: toggle
     title: Quiet Mode
+  - key: RivianPilotStartupWelcome
+    widget: toggle
+    title: Startup Welcome
+    description: Show a brief personalized welcome on the off-road home screen after RivianPilot starts. Set the displayed name from Device settings on the Comma.
   - key: OnroadUploads
     widget: toggle
     title: Onroad Uploads

@@ -266,6 +266,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     // Rivian
     {"RivianPilotFeatureLogging", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"RivianPilotStartupWelcome", {PERSISTENT | BACKUP, BOOL, "1"}},
+    {"RivianPilotWelcomeName", {PERSISTENT | BACKUP, STRING, "Anjan"}},
     {"RivianPilotBlindSpotObserver", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPilotLaneHuggingObserver", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPilotLaneHuggingMinSpeed", {PERSISTENT | BACKUP, INT, "25"}},  // MPH or km/h

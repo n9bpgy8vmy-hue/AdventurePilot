@@ -19,6 +19,8 @@ CONTENT_MARGIN = 40
 SPACING = 25
 RIGHT_COLUMN_WIDTH = 750
 REFRESH_INTERVAL = 10.0
+STARTUP_GREETING_SECONDS = 6.0
+MAX_GREETING_NAME_LENGTH = 32
 
 
 class HomeLayoutState(IntEnum):
@@ -57,6 +59,10 @@ class HomeLayout(Widget):
 
     self._prime_widget = PrimeWidget()
     self._setup_widget = SetupWidget()
+
+    self._startup_time = time.monotonic()
+    self._startup_greeting_enabled = bool(self.params.get("RivianPilotStartupWelcome", return_default=True))
+    self._startup_greeting_name = self._sanitize_greeting_name(self.params.get("RivianPilotWelcomeName", return_default=True))
 
     self._exp_mode_button = ExperimentalModeButton()
     self._setup_callbacks()
@@ -103,6 +109,35 @@ class HomeLayout(Widget):
       self._render_update_view()
     elif self.current_state == HomeLayoutState.ALERTS:
       self._render_alerts_view()
+
+    self._render_startup_greeting(current_time)
+
+  @staticmethod
+  def _sanitize_greeting_name(name: str | None) -> str:
+    if not name:
+      return ""
+
+    # Keep the greeting single-line and limited to characters supported by the
+    # default UI font. This also prevents a malformed parameter from affecting
+    # the rest of the home screen.
+    safe_name = "".join(c for c in name.strip() if c.isascii() and (c.isalnum() or c in " -'"))
+    return safe_name[:MAX_GREETING_NAME_LENGTH].strip()
+
+  def _render_startup_greeting(self, current_time: float):
+    if (not self._startup_greeting_enabled or self.current_state != HomeLayoutState.HOME or
+        current_time - self._startup_time >= STARTUP_GREETING_SECONDS):
+      return
+
+    greeting = f"Welcome, {self._startup_greeting_name}" if self._startup_greeting_name else "Welcome"
+    greeting_width = min(900, self._rect.width - 120)
+    greeting_rect = rl.Rectangle(
+      self._rect.x + (self._rect.width - greeting_width) / 2,
+      self._rect.y + (self._rect.height - 150) / 2,
+      greeting_width,
+      150,
+    )
+    rl.draw_rectangle_rounded(greeting_rect, 0.25, 12, rl.Color(20, 24, 32, 235))
+    gui_label(greeting_rect, greeting, 62, rl.WHITE, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
 
   def _update_state(self):
     self.header_rect = rl.Rectangle(
