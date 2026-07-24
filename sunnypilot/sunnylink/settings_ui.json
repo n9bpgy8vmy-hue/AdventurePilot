@@ -408,77 +408,6 @@
           ]
         },
         {
-          "id": "rivianpilot_lane_hugging",
-          "title": "RivianPilot Lane-Hugging Observer",
-          "description": "Observe driver lane-position corrections and warn near previously observed locations. Phase 1 never changes steering or MADS.",
-          "items": [
-            {
-              "key": "RivianPilotLaneHuggingObserver",
-              "widget": "toggle",
-              "title": "Enable Lane-Hugging Observer",
-              "description": "Record bounded GPS locations after sustained driver steering corrections while lane centering is active, then alert on future approaches.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotLaneHuggingMinSpeed",
-              "widget": "option",
-              "title": "Minimum Observation Speed",
-              "description": "Ignore steering corrections below this speed.",
-              "min": 10,
-              "max": 65,
-              "step": 5,
-              "unit": {
-                "metric": "km/h",
-                "imperial": "mph"
-              },
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotLaneHuggingObserver",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotLaneHuggingAlertDistance",
-              "widget": "option",
-              "title": "Approach Alert Distance",
-              "description": "Alert when approaching this distance from a previously observed correction location.",
-              "min": 50,
-              "max": 500,
-              "step": 50,
-              "unit": "meters",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotLaneHuggingObserver",
-                  "equals": true
-                }
-              ]
-            }
-          ]
-        },
-        {
           "id": "rivianpilot_manual_turn_recorder",
           "title": "RivianPilot Manual-Turn Recorder",
           "description": "Record one bounded, removable data package for each qualifying manual turn. Observation only; never changes steering, speed, or MADS.",
@@ -602,7 +531,7 @@
               "widget": "toggle",
               "title": "Remove All Turn Packages",
               "description": "Permanently remove every saved manual-turn package. The toggle resets after processing.",
-              "details": "This does not change Feature 2 lane-hugging locations or normal comma drive recordings.",
+              "details": "This does not change normal comma drive recordings.",
               "visibility": [
                 {
                   "type": "capability",

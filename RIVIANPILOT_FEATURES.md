@@ -10,11 +10,7 @@ Status: implemented, vehicle-tested, and validated as working exceptionally well
 
 ## Feature 2 — Lane-hugging observer
 
-Record locations where the driver corrects lane position and warn on future approaches.
-
-Phase 1 scope is observation, bounded logging, and driver alerts only. It must not change steering commands, lateral control, MADS state, or engagement behavior. Rich curve snapshots are limited to one every two seconds and record lane/path geometry, lane confidence, actual and desired curvature, driver/EPS/requested/applied steering torque, steering angle/rate, controller saturation, and tracking errors. A diagnostics failure disables only rich logging; location observation and alerts continue.
-
-Status: Phase 1 implementation in development; not yet vehicle-validated.
+Status: retired. Its observer, runtime integration, stored-parameter definitions, alerts, tests, and Sunnylink controls were removed. It no longer records correction locations or produces approach alerts.
 
 ## Feature 3 — Navigation/turn assistance
 
@@ -134,7 +130,7 @@ Status: approved for direct visual implementation with the above isolation requi
 
 Allow a carefully bounded preference for lane placement, such as a small center offset or additional distance from the inside of a curve, while respecting detected lane boundaries, road edges, vehicle width, and confidence limits.
 
-Status: backlog; requires Feature 2 data analysis, replay testing, strict offset limits, and separate approval before any steering effect.
+Status: backlog; requires independent data collection, replay testing, strict offset limits, and separate approval before any steering effect.
 
 ### Feature 10 — Steering Smoothness Slider ⭐⭐⭐⭐
 

@@ -25,7 +25,6 @@ from openpilot.system.version import get_build_metadata
 from openpilot.system.hardware import HARDWARE
 
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
-from openpilot.sunnypilot.rivianpilot.lane_hugging_observer import LaneHuggingObserver
 from openpilot.sunnypilot.rivianpilot.manual_turn_recorder import ManualTurnRecorder
 from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
@@ -174,18 +173,8 @@ class SelfdriveD(CruiseHelper):
     self.events_sp_prev = []
 
     self.mads = ModularAssistiveDrivingSystem(self)
-    self.lane_hugging_observer = None
     self.manual_turn_recorder = None
     if self.CP.brand == "rivian":
-      try:
-        self.lane_hugging_observer = LaneHuggingObserver(self.params)
-      except Exception as e:
-        # Experimental observers must not prevent selfdrived from starting.
-        try:
-          cloudlog.event("rivianpilot feature error", feature="lane_hugging_observer",
-                         errors=["initialization_failure_suppressed"], error_type=type(e).__name__)
-        except Exception:
-          pass
       try:
         self.manual_turn_recorder = ManualTurnRecorder(self.params)
       except Exception as e:
@@ -483,20 +472,6 @@ class SelfdriveD(CruiseHelper):
     if gps_ok:
       self.distance_traveled = 0
     self.distance_traveled += abs(CS.vEgo) * DT_CTRL
-
-    if self.lane_hugging_observer is not None:
-      try:
-        gps = self.sm[self.gps_location_service] if gps_ok else None
-        correction_direction = self.lane_hugging_observer.update(
-          CS, self.sm['carControl'].latActive, gps, self.sm['modelV2'], self.sm['controlsState'],
-          self.sm['carControl'], self.sm['carOutput'],
-        )
-        if correction_direction == "left":
-          self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadLeft)
-        elif correction_direction == "right":
-          self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadRight)
-      except Exception as e:
-        self.lane_hugging_observer.suppress_after_error(e)
 
     if self.manual_turn_recorder is not None:
       try:
