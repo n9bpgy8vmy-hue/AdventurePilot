@@ -130,7 +130,7 @@ Status: approved for direct visual implementation with the above isolation requi
 
 Allow a carefully bounded preference for lane placement, such as a small center offset or additional distance from the inside of a curve, while respecting detected lane boundaries, road edges, vehicle width, and confidence limits.
 
-Status: backlog; requires independent data collection, replay testing, strict offset limits, and separate approval before any steering effect.
+Implemented with separate Observe and Go Live controls. Curve strength is derived from predicted lateral acceleration, and a deliberate driver nudge can request a temporary preference. The requested value is capped by confident painted lane boundaries, plausible lane width, Rivian width, and a fixed clearance margin. Driver steering, blinkers, lane changes, non-Drive state, inactive lateral control, stale updates, malformed inputs, or feature errors remove the temporary contribution. Go Live defaults off pending controlled vehicle validation of direction and physical response.
 
 ### Feature 10 — Steering Smoothness Slider ⭐⭐⭐⭐
 

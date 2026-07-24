@@ -306,6 +306,8 @@ def main(demo=False):
 
   model_transform_main = np.zeros((3, 3), dtype=np.float32)
   model_transform_extra = np.zeros((3, 3), dtype=np.float32)
+  base_model_transform_main = np.zeros((3, 3), dtype=np.float32)
+  base_model_transform_extra = np.zeros((3, 3), dtype=np.float32)
   live_calib_seen = False
   buf_main, buf_extra = None, None
   meta_main = FrameMeta()
@@ -367,15 +369,27 @@ def main(demo=False):
     if sm.frame % 60 == 0:
       model.lat_delay = get_lat_delay(params, sm["liveDelay"].lateralDelay)
       model.PLANPLUS_CONTROL = params.get("PlanplusControl", return_default=True)
-      camera_offset_helper.set_offset(params.get("CameraOffset", return_default=True))
+    if sm.frame % 4 == 0:
+      base_camera_offset = params.get("CameraOffset", return_default=True)
+      dynamic_camera_offset = params.get("RivianPilotDynamicCameraOffset", return_default=True)
+      dynamic_offset_updated = params.get("RivianPilotDynamicCameraOffsetUpdated", return_default=True)
+      dynamic_offset_fresh = time.monotonic() - dynamic_offset_updated < 1.0
+      force_zero = (sm["carState"].steeringPressed or sm["carState"].leftBlinker or sm["carState"].rightBlinker or
+                    sm["carState"].gearShifter != car.CarState.GearShifter.drive or
+                    not sm["carControl"].latActive or not dynamic_offset_fresh)
+      camera_offset_helper.set_offset(base_camera_offset + (0.0 if force_zero else dynamic_camera_offset),
+                                      immediate=force_zero)
     lat_delay = model.lat_delay + model.LAT_SMOOTH_SECONDS
     if sm.updated["liveCalibration"] and sm.seen['roadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["liveCalibration"].rpyCalib, dtype=np.float32)
       dc = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['roadCameraState'].sensor))]
-      model_transform_main = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics if main_wide_camera else dc.fcam.intrinsics, False).astype(np.float32)
-      model_transform_extra = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics, True).astype(np.float32)
-      model_transform_main, model_transform_extra = camera_offset_helper.update(model_transform_main, model_transform_extra, sm, main_wide_camera)
+      base_model_transform_main = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics if main_wide_camera else dc.fcam.intrinsics, False).astype(np.float32)
+      base_model_transform_extra = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics, True).astype(np.float32)
       live_calib_seen = True
+    if live_calib_seen:
+      model_transform_main, model_transform_extra = camera_offset_helper.update(
+        base_model_transform_main.copy(), base_model_transform_extra.copy(), sm, main_wide_camera,
+      )
 
     traffic_convention = np.zeros(2)
     traffic_convention[int(is_rhd)] = 1

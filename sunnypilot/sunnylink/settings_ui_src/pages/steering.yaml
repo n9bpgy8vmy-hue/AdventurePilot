@@ -192,6 +192,119 @@ sections:
       equals: rivian
     enablement:
     - $ref: '#/macros/offroad'
+- id: rivianpilot_lane_position
+  title: RivianPilot Lane Position
+  description: Apply a small, bounded lane-position preference on curves or after a deliberate steering nudge. Driver steering always overrides it.
+  items:
+  - key: RivianPilotLanePositionObserve
+    widget: toggle
+    title: Observe Lane Position
+    description: Calculate and log requested, safety-capped, and applied offsets without changing the model path.
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+  - key: RivianPilotLanePositionGoLive
+    widget: toggle
+    title: Go Live
+    description: Allow the validated temporary offset to influence the model path. Requires Observe and confident painted lane boundaries.
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - $ref: '#/macros/offroad'
+    - type: param
+      key: RivianPilotLanePositionObserve
+      equals: true
+  - key: RivianPilotCurveOffset
+    widget: toggle
+    title: Curve Offset
+    description: Move the preferred path away from the inside edge when predicted lateral acceleration exceeds the threshold.
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotLanePositionObserve
+      equals: true
+  - key: RivianPilotCurveOffsetInches
+    widget: option
+    title: Maximum Curve Offset
+    description: Maximum requested curve offset before lane-boundary safety clamping.
+    min: 1
+    max: 10
+    step: 1
+    unit: inches
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotCurveOffset
+      equals: true
+  - key: RivianPilotCurveThreshold
+    widget: option
+    title: Curve Activation Threshold
+    description: Higher values require a stronger predicted curve before applying an offset.
+    min: 10
+    max: 90
+    step: 5
+    unit: percent
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotCurveOffset
+      equals: true
+  - key: RivianPilotNudgeOffset
+    widget: toggle
+    title: Nudge Lane Offset
+    description: After a deliberate steering nudge, temporarily prefer that side of the current lane.
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotLanePositionObserve
+      equals: true
+  - key: RivianPilotNudgeOffsetInches
+    widget: option
+    title: Nudge Offset Distance
+    description: Requested nudge offset before lane-boundary safety clamping.
+    min: 2
+    max: 10
+    step: 1
+    unit: inches
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotNudgeOffset
+      equals: true
+  - key: RivianPilotNudgeHoldSeconds
+    widget: option
+    title: Nudge Hold Time
+    description: Maximum time to retain a nudge preference when all confidence checks remain valid.
+    min: 5
+    max: 60
+    step: 5
+    unit: seconds
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotNudgeOffset
+      equals: true
 - id: rivianpilot_manual_turn_recorder
   title: RivianPilot Manual-Turn Recorder
   description: Record one bounded, removable data package for each qualifying manual turn. Observation only; never changes steering, speed, or MADS.

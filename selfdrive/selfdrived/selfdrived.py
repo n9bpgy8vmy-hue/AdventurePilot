@@ -25,6 +25,7 @@ from openpilot.system.version import get_build_metadata
 from openpilot.system.hardware import HARDWARE
 
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
+from openpilot.sunnypilot.rivianpilot.lane_position_controller import LanePositionController
 from openpilot.sunnypilot.rivianpilot.manual_turn_recorder import ManualTurnRecorder
 from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
@@ -173,8 +174,17 @@ class SelfdriveD(CruiseHelper):
     self.events_sp_prev = []
 
     self.mads = ModularAssistiveDrivingSystem(self)
+    self.lane_position_controller = None
     self.manual_turn_recorder = None
     if self.CP.brand == "rivian":
+      try:
+        self.lane_position_controller = LanePositionController(self.params)
+      except Exception as e:
+        try:
+          cloudlog.event("rivianpilot feature error", feature="lane_position",
+                         errors=["initialization_failure_suppressed"], error_type=type(e).__name__)
+        except Exception:
+          pass
       try:
         self.manual_turn_recorder = ManualTurnRecorder(self.params)
       except Exception as e:
@@ -472,6 +482,14 @@ class SelfdriveD(CruiseHelper):
     if gps_ok:
       self.distance_traveled = 0
     self.distance_traveled += abs(CS.vEgo) * DT_CTRL
+
+    if self.lane_position_controller is not None:
+      try:
+        self.lane_position_controller.update(
+          CS, self.sm['carControl'].latActive, self.sm['modelV2'], self.sm['controlsState'],
+        )
+      except Exception as e:
+        self.lane_position_controller.suppress_after_error(e)
 
     if self.manual_turn_recorder is not None:
       try:

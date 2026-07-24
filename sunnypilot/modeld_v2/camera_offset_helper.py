@@ -23,8 +23,10 @@ class CameraOffsetHelper:
     model_transform = (shear @ model_transform).astype(np.float32)
     return model_transform
 
-  def set_offset(self, offset):
+  def set_offset(self, offset, immediate=False):
     self.camera_offset = offset
+    if immediate:
+      self.actual_camera_offset = offset
 
   def update(self, model_transform_main, model_transform_extra, sm, main_wide_camera):
     self.actual_camera_offset = (0.9 * self.actual_camera_offset) + (0.1 * self.camera_offset)
