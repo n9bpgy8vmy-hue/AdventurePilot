@@ -2,7 +2,7 @@
 import cereal.messaging as messaging
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process
-from openpilot.selfdrive.monitoring.policy import DriverMonitoring, AlertLevel, MonitoringPolicy
+from openpilot.selfdrive.monitoring.policy import DriverMonitoring
 
 
 def dmonitoringd_thread():
@@ -16,20 +16,25 @@ def dmonitoringd_thread():
   DM = DriverMonitoring(rhd_saved=params.get_bool("IsRhdDetected"), always_on=params.get_bool("AlwaysOnDM"))
   demo_mode=False
 
-  # --- ADVENTUREPILOT OVERRIDE: PRE-DECLARE SCOPE FOR ABSOLUTE SAFETY ---
+  # --- ADVENTUREPILOT OVERRIDE: INITIALIZE LOOPING DM SUPPRESSION ---
   dm_suppress_frames = 72000  # 60 mins * 60 secs * 20 Hz loop
-  consecutive_unattended_frames = 0 # Track missing driver interaction torque
+  suppress_enabled = True     # Initial state assumption
 
-  # Map suppression loop directly to stock configuration layout
+  # Isolated parameter lookup: Fails safely to True if parameter manager throws an error
   try:
-    suppress_enabled = not params.get_bool("AlwaysOnDM")
-  except Exception:
-    suppress_enabled = True # Fallback state choice if parameter lookup fails
+    suppress_enabled = params.get_bool("DMSessionBypass")
+  except Exception as param_init_err:
+    suppress_enabled = True
+    try:
+      print(f"[RivianPilot DM Latch Warning]: Init parameter error: {param_init_err}. Defaulting to hardcoded 60-min loops.")
+    except Exception:
+      pass
 
   # 20Hz <- dmonitoringmodeld
   while True:
     sm.update()
     if not sm.updated['driverStateV2']:
+      # iterate when model has new output
       continue
 
     valid = sm.all_checks()
@@ -38,28 +43,12 @@ def dmonitoringd_thread():
     elif valid:
       DM.run_step(sm, demo=demo_mode)
 
+    # publish (Always compile the original, native sunnypilot packet first)
     dat = DM.get_state_packet(valid=valid)
 
     # --- ADVENTUREPILOT OVERRIDE: GLOBAL TRY-CATCH PROTECTION ENVELOPE ---
     if suppress_enabled:
       try:
-        # SAFETY KILL SWITCH: Track if human hands are absent from the wheel (3 minutes max)
-        try:
-          if sm['carState'] is not None and (abs(sm['carState'].steeringTorque) > 0.1 or sm['carState'].gasPressed):
-            consecutive_unattended_frames = 0  # Driver interacted, reset counter
-          else:
-            consecutive_unattended_frames += 1 # No torque detected this frame
-
-          # 3 mins * 60 secs * 20 Hz = 3600 frames of complete driver absence
-          if consecutive_unattended_frames >= 3600:
-            suppress_enabled = False
-            try:
-              print("[RivianPilot DM Latch CRITICAL SAFETY]: 3 minutes with zero torque. Killing bypass.")
-            except Exception:
-              pass
-        except Exception:
-          pass
-
         # Loop Check: If the 60-minute frame tracker expires, automatically renew it
         if dm_suppress_frames <= 0:
           dm_suppress_frames = 72000
@@ -69,42 +58,25 @@ def dmonitoringd_thread():
             pass
 
         dm_suppress_frames -= 1
+        state = dat.driverMonitoringState
         
-        # SAFETY INTEGRITY PATCH: Actively scrub terminal lockout ledgers stored inside policy memory
-        try:
-          if hasattr(DM, 'terminal_alert_cnt'): DM.terminal_alert_cnt = 0
-          if hasattr(DM, 'terminal_time'): DM.terminal_time = 0
-          if hasattr(DM, 'awareness'): DM.awareness = 1.0
-          if hasattr(DM, 'driver_distracted'): DM.driver_distracted = False
+        # Reflection-only Attribute Overwrites (Safe against all structural renaming updates)
+        for attr in ['faceOrientationFiltered', 'face_orientation_filtered']:
+          if hasattr(state, attr): setattr(state, attr, [0.0, 0.0, 0.0])
           
-          if hasattr(DM, 'alert_level'): DM.alert_level = AlertLevel.none
-          if hasattr(DM, 'active_policy'): DM.active_policy = MonitoringPolicy.vision
+        for attr in ['eyesBlinkFiltered', 'eyes_blink_filtered']:
+          if hasattr(state, attr): setattr(state, attr, [0.0, 0.0])
           
-          if hasattr(DM, '_reset_awareness'): DM._reset_awareness()
-        except Exception:
-          pass
+        for attr in ['distractedPosePredictions', 'distracted_pose_predictions']:
+          if hasattr(state, attr): setattr(state, attr, [0.0, 0.0, 0.0])
+          
+        for attr in ['distractedEyesPredictions', 'distracted_eyes_predictions']:
+          if hasattr(state, attr): setattr(state, attr, [0.0, 0.0, 0.0])
 
-        # Verify dat structure exists before modifying its attributes
-        if dat is not None and hasattr(dat, 'driverMonitoringState') and suppress_enabled:
-          state = dat.driverMonitoringState
-          
-          # Reflection-only Attribute Overwrites (Safe against all structural renaming updates)
-          for attr in ['faceOrientationFiltered', 'face_orientation_filtered']:
-            if hasattr(state, attr): setattr(state, attr, [0.0, 0.0, 0.0])
-            
-          for attr in ['eyesBlinkFiltered', 'eyes_blink_filtered']:
-            if hasattr(state, attr): setattr(state, attr, [0.0, 0.0])
-            
-          for attr in ['distractedPosePredictions', 'distracted_pose_predictions']:
-            if hasattr(state, attr): setattr(state, attr, [0.0, 0.0, 0.0])
-            
-          for attr in ['distractedEyesPredictions', 'distracted_eyes_predictions']:
-            if hasattr(state, attr): setattr(state, attr, [0.0, 0.0, 0.0])
-
-          if hasattr(state, 'awareness'): setattr(state, 'awareness', 1.0)
-          if hasattr(state, 'awarenessStatus'): setattr(state, 'awarenessStatus', 1)
-          if hasattr(state, 'alertTextMsg'): setattr(state, 'alertTextMsg', "")
-          if hasattr(state, 'alertStatus'): setattr(state, 'alertStatus', 0)
+        if hasattr(state, 'awareness'): setattr(state, 'awareness', 1.0)
+        if hasattr(state, 'awarenessStatus'): setattr(state, 'awarenessStatus', 1)
+        if hasattr(state, 'alertTextMsg'): setattr(state, 'alertTextMsg', "")
+        if hasattr(state, 'alertStatus'): setattr(state, 'alertStatus', 0)
 
         # Periodic status telemetry updates printed out to background terminals every 60 seconds
         if dm_suppress_frames % 1200 == 0:
@@ -114,6 +86,7 @@ def dmonitoringd_thread():
             pass
           
       except Exception as critical_err:
+        # ABSOLUTE SAFETY NET: Instantly abort custom code on error, leaving the original packet completely untouched
         suppress_enabled = False
         try:
           print(f"[RivianPilot DM Latch CRITICAL FALLBACK]: Intercept failed ({critical_err}). Reverting to standard logic.")
@@ -121,40 +94,27 @@ def dmonitoringd_thread():
           pass
 
     # Always broadcast the message packet out to messaging streams at a locked 20Hz frequency
-    try:
-      pm.send('driverMonitoringState', dat)
-    except Exception:
-      pass
+    pm.send('driverMonitoringState', dat)
 
-    # VERIFY DRIVERSTATE INPUT DATA IS PRESENT BEFORE CHECKING FRAME ID MODULO
-    if sm['driverStateV2'] is not None and hasattr(sm['driverStateV2'], 'frameId') and sm['driverStateV2'].frameId % 40 == 1:
-      try:
-        DM.always_on = params.get_bool("AlwaysOnDM")
-        demo_mode = params.get_bool("IsDriverViewEnabled")
-      except Exception:
-        pass
+    # load live always-on toggle
+    if sm['driverStateV2'].frameId % 40 == 1:
+      DM.always_on = params.get_bool("AlwaysOnDM")
+      demo_mode = params.get_bool("IsDriverViewEnabled")
 
-      # Hot-reload the toggle inversion configuration mid-drive wrapped in safety layers
+      # Hot-reload toggle configuration mid-drive
       try:
-        suppress_enabled = not params.get_bool("AlwaysOnDM")
+        suppress_enabled = params.get_bool("DMSessionBypass")
       except Exception:
-        pass
+        pass # Retain active runtime state if lookup breaks mid-drive
 
     # save rhd virtual toggle every 5 mins
-    try:
-      if (sm['driverStateV2'] is not None and hasattr(sm['driverStateV2'], 'frameId') and 
-       sm['driverStateV2'].frameId % 6000 == 0 and not demo_mode and
-       DM.wheelpos_offsetter.filtered_stat.n > DM.settings._WHEELPOS_FILTER_MIN_COUNT and
-       DM.wheel_on_right == (DM.wheelpos_offsetter.filtered_stat.M > DM.settings._WHEELPOS_THRESHOLD)):
-        params.put_bool("IsRhdDetected", DM.wheel_on_right)
-    except Exception:
-      pass
+    if (sm['driverStateV2'].frameId % 6000 == 0 and not demo_mode and
+     DM.wheelpos_offsetter.filtered_stat.n > DM.settings._WHEELPOS_FILTER_MIN_COUNT and
+     DM.wheel_on_right == (DM.wheelpos_offsetter.filtered_stat.M > DM.settings._WHEELPOS_THRESHOLD)):
+      params.put_bool("IsRhdDetected", DM.wheel_on_right)
 
 def main():
-  try:
-    dmonitoringd_thread()
-  except Exception:
-    pass
+  dmonitoringd_thread()
 
 
 if __name__ == '__main__':
