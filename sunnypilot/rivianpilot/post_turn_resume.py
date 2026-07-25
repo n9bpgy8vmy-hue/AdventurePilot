@@ -36,6 +36,7 @@ class PostTurnResume:
   DIAGNOSTIC_SAMPLE_SECONDS = 0.5
   DIAGNOSTIC_POST_BLINKER_SECONDS = 15.0
   DIAGNOSTIC_MAX_SEQUENCE_SECONDS = 30.0
+  ROAD_EDGE_DROPOUT_GRACE_SECONDS = 0.5
 
   def __init__(self, params):
     self.params = params
@@ -58,6 +59,9 @@ class PostTurnResume:
     self.diagnostic_sequence_active = False
     self.diagnostic_faulted = False
     self.diagnostic_error_logged = False
+    self.road_edge_recovery_qualified = False
+    self.road_edge_grace_ticks = 0
+    self.last_road_edge_diagnostics = {}
     self.read_params()
 
   def read_params(self) -> None:
@@ -273,6 +277,9 @@ class PostTurnResume:
     self.high_speed_lane_confirmed = False
     self.active_blinker_direction = "none"
     self.last_diagnostic_sample = 0.0
+    self.road_edge_recovery_qualified = False
+    self.road_edge_grace_ticks = 0
+    self.last_road_edge_diagnostics = {}
 
   def _speed_factor(self) -> float:
     return CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
@@ -316,9 +323,22 @@ class PostTurnResume:
 
   def _road_edges_confident(self, model: log.ModelDataV2, model_valid: bool) -> bool:
     """Require two reliable road edges and a plausible model path between them."""
+    self.last_road_edge_diagnostics = {}
     if not model_valid or len(model.roadEdges) < 2 or len(model.roadEdgeStds) < 2:
+      self.last_road_edge_diagnostics = {"edge_reject_reason": "road_edge_model_unavailable"}
       return False
-    if model.roadEdgeStds[0] > self.ROAD_EDGE_STD_MAX or model.roadEdgeStds[1] > self.ROAD_EDGE_STD_MAX:
+    left_std = float(model.roadEdgeStds[0])
+    right_std = float(model.roadEdgeStds[1])
+    self.last_road_edge_diagnostics = {
+      "left_road_edge_std": round(left_std, 3),
+      "right_road_edge_std": round(right_std, 3),
+      "road_edge_std_limit": self.ROAD_EDGE_STD_MAX,
+    }
+    if not all(math.isfinite(value) for value in (left_std, right_std)):
+      self.last_road_edge_diagnostics["edge_reject_reason"] = "road_edge_std_non_finite"
+      return False
+    if left_std > self.ROAD_EDGE_STD_MAX or right_std > self.ROAD_EDGE_STD_MAX:
+      self.last_road_edge_diagnostics["edge_reject_reason"] = "road_edge_std"
       return False
 
     left_y = model.roadEdges[0].y
@@ -326,28 +346,56 @@ class PostTurnResume:
     path_y = model.position.y
     sample_index = self.ROAD_EDGE_SAMPLE_INDEX
     if min(len(left_y), len(right_y), len(path_y)) <= sample_index:
+      self.last_road_edge_diagnostics["edge_reject_reason"] = "road_edge_geometry_unavailable"
       return False
 
     left = float(left_y[sample_index])
     right = float(right_y[sample_index])
     path = float(path_y[sample_index])
     if not all(math.isfinite(value) for value in (left, right, path)):
+      self.last_road_edge_diagnostics["edge_reject_reason"] = "road_edge_geometry_non_finite"
       return False
 
     low_edge, high_edge = sorted((left, right))
     road_width = high_edge - low_edge
     road_center = (low_edge + high_edge) / 2.0
-    return bool(
-      self.ROAD_WIDTH_MIN_M <= road_width <= self.ROAD_WIDTH_MAX_M and
-      low_edge + self.ROAD_EDGE_MARGIN_M <= path <= high_edge - self.ROAD_EDGE_MARGIN_M and
-      abs(path - road_center) <= self.PATH_CENTER_TOLERANCE_M
-    )
+    path_center_error = abs(path - road_center)
+    left_path_margin = path - low_edge
+    right_path_margin = high_edge - path
+    self.last_road_edge_diagnostics.update({
+      "road_width_m": round(road_width, 3),
+      "path_center_error_m": round(path_center_error, 3),
+      "left_path_margin_m": round(left_path_margin, 3),
+      "right_path_margin_m": round(right_path_margin, 3),
+    })
+    if not self.ROAD_WIDTH_MIN_M <= road_width <= self.ROAD_WIDTH_MAX_M:
+      self.last_road_edge_diagnostics["edge_reject_reason"] = "road_width"
+      return False
+    if left_path_margin < self.ROAD_EDGE_MARGIN_M or right_path_margin < self.ROAD_EDGE_MARGIN_M:
+      self.last_road_edge_diagnostics["edge_reject_reason"] = "path_outside_road_edges"
+      return False
+    if path_center_error > self.PATH_CENTER_TOLERANCE_M:
+      self.last_road_edge_diagnostics["edge_reject_reason"] = "path_not_centered"
+      return False
+    self.last_road_edge_diagnostics["edge_reject_reason"] = "none"
+    return True
 
   def _recovery_path(self, model: log.ModelDataV2, model_valid: bool, high_speed_escape: bool) -> str | None:
     if self._lane_confident(model, model_valid):
+      self.road_edge_recovery_qualified = False
+      self.road_edge_grace_ticks = 0
       return "lane_lines"
-    if self.relaxed_road_edges and not high_speed_escape and self._road_edges_confident(model, model_valid):
-      return "road_edges"
+    if high_speed_escape:
+      self.road_edge_recovery_qualified = False
+      self.road_edge_grace_ticks = 0
+    if self.relaxed_road_edges and not high_speed_escape:
+      if self._road_edges_confident(model, model_valid):
+        if self.road_edge_recovery_qualified:
+          self.road_edge_grace_ticks = max(1, round(self.ROAD_EDGE_DROPOUT_GRACE_SECONDS / DT_CTRL))
+        return "road_edges"
+      if self.road_edge_recovery_qualified and self.road_edge_grace_ticks > 0:
+        self.road_edge_grace_ticks -= 1
+        return "road_edges_grace"
     return None
 
   def _settled_reason(self, CS: structs.CarState) -> str | None:
@@ -366,7 +414,7 @@ class PostTurnResume:
     return None
 
   def _stable_reason(self, CS: structs.CarState, model: log.ModelDataV2, model_valid: bool,
-                     high_speed_escape: bool = False) -> str | None:
+                     high_speed_escape: bool = False, recovery_path: str | None = None) -> str | None:
     settled_reason = self._settled_reason(CS)
     if settled_reason is not None:
       return settled_reason
@@ -374,7 +422,7 @@ class PostTurnResume:
       return None
     if not model_valid:
       return "model_unavailable"
-    if self._recovery_path(model, model_valid, high_speed_escape) is None:
+    if recovery_path is None:
       return "lane_not_stable"
     return None
 
@@ -442,23 +490,29 @@ class PostTurnResume:
       self.high_speed_lane_confirmed = True
       self._log("lane_confidence_latched", CS, lane_probability_left=round(model.laneLineProbs[1], 3),
                 lane_probability_right=round(model.laneLineProbs[2], 3))
-    reason = self._stable_reason(CS, model, model_valid, high_speed_escape)
+    recovery_path = self._recovery_path(model, model_valid, high_speed_escape)
+    reason = self._stable_reason(CS, model, model_valid, high_speed_escape, recovery_path)
     if reason is not None:
       if reason != self.last_wait_reason:
-        self._log("waiting", CS, reason=reason)
+        edge_diagnostics = self.last_road_edge_diagnostics if reason == "lane_not_stable" else {}
+        self._log("waiting", CS, reason=reason, **edge_diagnostics)
       self.last_wait_reason = reason
       self.stable_ticks = 0
       self.countdown = 0.0
       self.last_warning_second = 0
+      self.road_edge_recovery_qualified = False
+      self.road_edge_grace_ticks = 0
       return PostTurnAction.waiting, None
 
     self.last_wait_reason = None
-    recovery_path = self._recovery_path(model, model_valid, high_speed_escape)
     required_stable_seconds = self.HIGH_SPEED_STABLE_SECONDS if high_speed_escape else self.stable_seconds
     required_stable_ticks = max(1, round(required_stable_seconds / DT_CTRL))
     if self.stable_ticks < required_stable_ticks:
       self.stable_ticks += 1
       if self.stable_ticks == required_stable_ticks:
+        if recovery_path == "road_edges":
+          self.road_edge_recovery_qualified = True
+          self.road_edge_grace_ticks = max(1, round(self.ROAD_EDGE_DROPOUT_GRACE_SECONDS / DT_CTRL))
         self._log("lane_stable", CS, stable_seconds=required_stable_seconds,
                   resume_path="above_turn_speed" if high_speed_escape else recovery_path)
       return PostTurnAction.waiting, None

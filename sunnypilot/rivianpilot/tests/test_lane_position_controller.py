@@ -56,6 +56,16 @@ def test_curve_offset_is_bounded_and_away_from_inside():
   assert abs(feature.last_output) <= 3 * 0.0254
 
 
+def test_dynamic_offset_params_are_written_as_runtime_float_types():
+  p = params()
+  LanePositionController(p)
+
+  offset_write = next(call for call in p.put.call_args_list if call.args[0] == "RivianPilotDynamicCameraOffset")
+  heartbeat_write = next(call for call in p.put.call_args_list if call.args[0] == "RivianPilotDynamicCameraOffsetUpdated")
+  assert isinstance(offset_write.args[1], float)
+  assert isinstance(heartbeat_write.args[1], float)
+
+
 def test_low_confidence_suppresses_feature():
   p = params()
   feature = LanePositionController(p)

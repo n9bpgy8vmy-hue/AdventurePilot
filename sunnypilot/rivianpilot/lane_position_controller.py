@@ -50,6 +50,7 @@ class LanePositionController:
     self.diagnostic_error_logged = False
     self.get_params()
     self._publish(0.0)
+    self._log("initialized", observe=self.observe, go_live=self.go_live)
 
   @staticmethod
   def _finite(value) -> float:
@@ -82,11 +83,11 @@ class LanePositionController:
     # second copy of the feature when both are enabled.
     output = offset_m if self.go_live and not self.faulted else 0.0
     if self.last_output is None or abs(output - self.last_output) >= 0.001:
-      self.params.put("RivianPilotDynamicCameraOffset", str(round(output, 4)), block=False)
+      self.params.put("RivianPilotDynamicCameraOffset", float(round(output, 4)), block=False)
       self.last_output = output
     now = time.monotonic()
     if now - self.last_heartbeat >= 0.5:
-      self.params.put("RivianPilotDynamicCameraOffsetUpdated", str(now), block=False)
+      self.params.put("RivianPilotDynamicCameraOffsetUpdated", float(now), block=False)
       self.last_heartbeat = now
 
   @staticmethod

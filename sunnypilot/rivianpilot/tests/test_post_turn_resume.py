@@ -301,6 +301,51 @@ def test_relaxed_mode_resumes_with_two_confident_edges_and_safe_path(mocker):
   assert run_until_resume(feature, car_state(speed_mph=15), curb_model)
 
 
+def test_relaxed_mode_tolerates_brief_edge_confidence_flicker_after_qualification(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  feature.relaxed_road_edges = True
+  feature.update(car_state(right=True), model(), True, True)
+  CS = car_state(speed_mph=15)
+  curb_model = model(left_prob=0.1, right_prob=0.1)
+  flicker_model = model(left_prob=0.1, right_prob=0.1, left_edge_std=0.65)
+
+  for _ in range(round(feature.stable_seconds / DT_CTRL) + 1):
+    feature.update(CS, curb_model, True, False)
+  assert feature.road_edge_recovery_qualified
+
+  for tick in range(round(feature.resume_delay / DT_CTRL) + 5):
+    # Refresh strict confidence every 0.4 seconds. The intervening dropout is
+    # shorter than the bounded 0.5-second grace period.
+    lane_model = curb_model if tick % round(0.4 / DT_CTRL) == 0 else flicker_model
+    action, _ = feature.update(CS, lane_model, True, False)
+    if action == PostTurnAction.resume:
+      break
+  else:
+    raise AssertionError("brief curb confidence flicker blocked resume")
+
+
+def test_relaxed_mode_resets_after_sustained_edge_confidence_loss(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  feature.relaxed_road_edges = True
+  feature.update(car_state(right=True), model(), True, True)
+  CS = car_state(speed_mph=15)
+  curb_model = model(left_prob=0.1, right_prob=0.1)
+
+  for _ in range(round(feature.stable_seconds / DT_CTRL) + 1):
+    feature.update(CS, curb_model, True, False)
+  assert feature.road_edge_recovery_qualified
+
+  uncertain_model = model(left_prob=0.1, right_prob=0.1, left_edge_std=0.7)
+  for _ in range(round(feature.ROAD_EDGE_DROPOUT_GRACE_SECONDS / DT_CTRL) + 2):
+    action, _ = feature.update(CS, uncertain_model, True, False)
+    assert action == PostTurnAction.waiting
+
+  assert not feature.road_edge_recovery_qualified
+  assert feature.stable_ticks == 0
+  assert feature.countdown == 0.0
+  assert feature.last_road_edge_diagnostics["edge_reject_reason"] == "road_edge_std"
+
+
 def test_relaxed_mode_rejects_single_uncertain_or_implausible_edges(mocker):
   unsafe_models = [
     model(left_prob=0.1, right_prob=0.1, left_edge_std=0.7),
