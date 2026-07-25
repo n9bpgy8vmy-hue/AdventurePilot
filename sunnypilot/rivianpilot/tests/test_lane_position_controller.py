@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock  # noqa: TID251
 
 from opendbc.car import structs
 
@@ -87,6 +87,66 @@ def test_observe_only_never_publishes_nonzero():
   feature = LanePositionController(p)
   feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
   assert feature.last_output == 0.0
+
+
+def test_go_live_includes_observation_without_requiring_observe():
+  p = params()
+  p.get_bool.side_effect = lambda key: bool({
+    "RivianPilotLanePositionObserve": False, "RivianPilotLanePositionGoLive": True,
+    "RivianPilotFeatureLogging": False, "RivianPilotCurveOffset": True,
+    "RivianPilotNudgeOffset": True,
+  }[key])
+  feature = LanePositionController(p)
+  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  assert feature.last_output < 0.0
+
+
+def test_go_live_logs_torque_and_controller_diagnostics(mocker):
+  p = params()
+  p.get_bool.side_effect = lambda key: bool({
+    "RivianPilotLanePositionObserve": True, "RivianPilotLanePositionGoLive": True,
+    "RivianPilotFeatureLogging": True, "RivianPilotCurveOffset": True,
+    "RivianPilotNudgeOffset": True,
+  }[key])
+  feature = LanePositionController(p)
+  cs = car_state()
+  cs.steeringTorqueEps = 0.2
+  cs.steeringAngleDeg = 1.5
+  cs.steeringRateDeg = 0.4
+  cs.yawRate = 0.01
+  cs.aEgo = -0.1
+  lateral_log = SimpleNamespace(saturated=True, output=0.21)
+  lateral_state = SimpleNamespace(which=lambda: "torqueState", torqueState=lateral_log)
+  controls = SimpleNamespace(desiredCurvature=0.002, curvature=0.0018, lateralControlState=lateral_state)
+  car_control = SimpleNamespace(actuators=SimpleNamespace(torque=0.22))
+  car_output = SimpleNamespace(actuatorsOutput=SimpleNamespace(torque=0.20))
+  event = mocker.patch("openpilot.sunnypilot.rivianpilot.lane_position_controller.cloudlog.event")
+
+  feature.update(cs, True, model(), controls, car_control, car_output, now=1.0)
+
+  sample = next(call for call in event.call_args_list if call.kwargs.get("action") == "sample")
+  assert sample.kwargs["eps_torque"] == 0.2
+  assert sample.kwargs["requested_torque"] == 0.22
+  assert sample.kwargs["applied_torque"] == 0.2
+  assert sample.kwargs["controller_type"] == "torqueState"
+  assert sample.kwargs["controller_saturated"]
+
+
+def test_diagnostic_failure_does_not_disable_lane_position(mocker):
+  p = params()
+  p.get_bool.side_effect = lambda key: bool({
+    "RivianPilotLanePositionObserve": True, "RivianPilotLanePositionGoLive": True,
+    "RivianPilotFeatureLogging": True, "RivianPilotCurveOffset": True,
+    "RivianPilotNudgeOffset": True,
+  }[key])
+  feature = LanePositionController(p)
+  mocker.patch.object(feature, "_diagnostics", side_effect=RuntimeError("diagnostic failure"))
+
+  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+
+  assert feature.diagnostic_faulted
+  assert not feature.faulted
+  assert feature.last_output < 0.0
 
 
 def test_blinker_cancels_offset():

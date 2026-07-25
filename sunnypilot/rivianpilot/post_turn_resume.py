@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from enum import IntEnum
 
 from cereal import log
@@ -32,6 +33,9 @@ class PostTurnResume:
   ROAD_EDGE_MARGIN_M = 0.5
   PATH_CENTER_TOLERANCE_M = 1.5
   ROAD_EDGE_SAMPLE_INDEX = 5
+  DIAGNOSTIC_SAMPLE_SECONDS = 0.5
+  DIAGNOSTIC_POST_BLINKER_SECONDS = 15.0
+  DIAGNOSTIC_MAX_SEQUENCE_SECONDS = 30.0
 
   def __init__(self, params):
     self.params = params
@@ -48,6 +52,12 @@ class PostTurnResume:
     self.pause_confirmation_ticks = 0
     self.high_speed_lane_confirmed = False
     self.active_blinker_direction = "none"
+    self.last_diagnostic_sample = 0.0
+    self.diagnostic_observe_until = 0.0
+    self.diagnostic_sequence_started = 0.0
+    self.diagnostic_sequence_active = False
+    self.diagnostic_faulted = False
+    self.diagnostic_error_logged = False
     self.read_params()
 
   def read_params(self) -> None:
@@ -111,6 +121,124 @@ class PostTurnResume:
       # Diagnostics are optional and must never affect lateral control.
       self.logging_enabled = False
 
+  @staticmethod
+  def _diagnostic_fields(CS: structs.CarState, model, controls_state=None,
+                         car_control=None, car_output=None) -> dict:
+    """Collect lane-change-to-turn evidence without influencing state decisions."""
+    fields = {}
+    try:
+      fields.update({
+        "accel_ms2": round(float(getattr(CS, "aEgo", 0.0)), 3),
+        "gas_pressed": bool(getattr(CS, "gasPressed", False)),
+        "brake_pressed": bool(getattr(CS, "brakePressed", False)),
+        "steering_pressed": bool(getattr(CS, "steeringPressed", False)),
+        "driver_torque": round(float(getattr(CS, "steeringTorque", 0.0)), 3),
+        "eps_torque": round(float(getattr(CS, "steeringTorqueEps", 0.0)), 3),
+        "steering_rate_deg_s": round(float(getattr(CS, "steeringRateDeg", 0.0)), 3),
+        "left_blinker": bool(CS.leftBlinker),
+        "right_blinker": bool(CS.rightBlinker),
+      })
+    except (TypeError, ValueError, OverflowError):
+      pass
+    try:
+      meta = model.meta
+      fields["lane_change_state"] = str(meta.laneChangeState)
+      fields["lane_change_direction"] = str(meta.laneChangeDirection)
+      fields["hard_brake_predicted"] = bool(getattr(meta, "hardBrakePredicted", False))
+    except (AttributeError, TypeError, ValueError):
+      pass
+    try:
+      lane_probs = list(model.laneLineProbs)
+      fields["left_lane_probability"] = round(float(lane_probs[1]), 3) if len(lane_probs) >= 3 else None
+      fields["right_lane_probability"] = round(float(lane_probs[2]), 3) if len(lane_probs) >= 3 else None
+      edge_stds = list(model.roadEdgeStds)
+      fields["left_road_edge_std"] = round(float(edge_stds[0]), 3) if len(edge_stds) >= 2 else None
+      fields["right_road_edge_std"] = round(float(edge_stds[1]), 3) if len(edge_stds) >= 2 else None
+    except (AttributeError, TypeError, ValueError, OverflowError):
+      pass
+    try:
+      actual_curvature = float(controls_state.curvature)
+      desired_curvature = float(controls_state.desiredCurvature)
+      fields.update({
+        "actual_curvature": round(actual_curvature, 7),
+        "desired_curvature": round(desired_curvature, 7),
+        "actual_lateral_accel_ms2": round(actual_curvature * float(CS.vEgo) ** 2, 3),
+        "desired_lateral_accel_ms2": round(desired_curvature * float(CS.vEgo) ** 2, 3),
+      })
+      lateral_state = controls_state.lateralControlState
+      controller_type = lateral_state.which()
+      lateral_log = getattr(lateral_state, controller_type)
+      fields["controller_type"] = controller_type
+      fields["controller_saturated"] = bool(getattr(lateral_log, "saturated", False))
+      fields["controller_output"] = round(float(getattr(lateral_log, "output", 0.0)), 4)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+      pass
+    try:
+      fields["requested_torque"] = round(float(car_control.actuators.torque), 4)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+      pass
+    try:
+      fields["applied_torque"] = round(float(car_output.actuatorsOutput.torque), 4)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+      pass
+    return fields
+
+  def _sample_diagnostics(self, CS: structs.CarState, model, controls_state=None,
+                          car_control=None, car_output=None, force: bool = False) -> None:
+    if not self.logging_enabled or self.diagnostic_faulted:
+      return
+    now = time.monotonic()
+    if not force and now - self.last_diagnostic_sample < self.DIAGNOSTIC_SAMPLE_SECONDS:
+      return
+    self.last_diagnostic_sample = now
+    self._log("handover_observation", CS, pending=self.pending, live_sequence=self.live_sequence,
+              wait_reason=self.last_wait_reason,
+              **self._safe_diagnostic_fields(CS, model, controls_state, car_control, car_output))
+
+  def _suppress_diagnostics(self, exception: Exception) -> None:
+    """Disable observation only; never disable Classic Post-Turn Resume."""
+    self.diagnostic_faulted = True
+    if self.diagnostic_error_logged:
+      return
+    self.diagnostic_error_logged = True
+    try:
+      cloudlog.event("rivianpilot feature error", feature="post_turn_handover_observer",
+                     errors=["diagnostic_failure_suppressed"], error_type=type(exception).__name__)
+    except Exception:
+      pass
+
+  def _safe_diagnostic_fields(self, CS: structs.CarState, model, controls_state=None,
+                              car_control=None, car_output=None) -> dict:
+    if self.diagnostic_faulted:
+      return {}
+    try:
+      return self._diagnostic_fields(CS, model, controls_state, car_control, car_output)
+    except Exception as e:
+      self._suppress_diagnostics(e)
+      return {}
+
+  def _observe_handover_sequence(self, CS: structs.CarState, model, controls_state=None,
+                                 car_control=None, car_output=None) -> None:
+    """Observe high-speed Nudge through the following turn without taking action."""
+    now = time.monotonic()
+    lane_change_active = False
+    try:
+      lane_change_active = model.meta.laneChangeState != log.LaneChangeState.off
+    except (AttributeError, TypeError, ValueError):
+      pass
+    trigger_active = self._one_blinker(CS) or lane_change_active
+    if trigger_active and not self.diagnostic_sequence_active:
+      self.diagnostic_sequence_active = True
+      self.diagnostic_sequence_started = now
+    if trigger_active:
+      sequence_limit = self.diagnostic_sequence_started + self.DIAGNOSTIC_MAX_SEQUENCE_SECONDS
+      self.diagnostic_observe_until = min(sequence_limit, now + self.DIAGNOSTIC_POST_BLINKER_SECONDS)
+    if now <= self.diagnostic_observe_until:
+      self._sample_diagnostics(CS, model, controls_state, car_control, car_output)
+    elif not trigger_active:
+      self.diagnostic_sequence_active = False
+      self.diagnostic_sequence_started = 0.0
+
   def suppress_after_error(self, exception: Exception, error: str = "runtime_failure_suppressed") -> None:
     """Disable this feature for the current process after an unexpected failure."""
     self.faulted = True
@@ -144,6 +272,7 @@ class PostTurnResume:
     self.pause_confirmation_ticks = 0
     self.high_speed_lane_confirmed = False
     self.active_blinker_direction = "none"
+    self.last_diagnostic_sample = 0.0
 
   def _speed_factor(self) -> float:
     return CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
@@ -250,12 +379,19 @@ class PostTurnResume:
     return None
 
   def update(self, CS: structs.CarState, model: log.ModelDataV2, model_valid: bool,
-             lateral_active: bool) -> tuple[PostTurnAction, int | None]:
+             lateral_active: bool, controls_state=None, car_control=None,
+             car_output=None) -> tuple[PostTurnAction, int | None]:
     """Return state action plus an optional countdown warning second."""
     if self.faulted or (not self.observe_enabled and not self.go_live) or (self.go_live and self.last_config_error is not None):
       if self.pending:
         self.reset(CS, "disabled")
       return PostTurnAction.none, None
+
+    if not self.diagnostic_faulted:
+      try:
+        self._observe_handover_sequence(CS, model, controls_state, car_control, car_output)
+      except Exception as e:
+        self._suppress_diagnostics(e)
 
     if self.pending and self.live_sequence and not self.go_live:
       self.reset(CS, "go_live_disabled")
@@ -269,7 +405,12 @@ class PostTurnResume:
       self.direction = self._blinker_direction(CS)
       self.active_blinker_direction = self.direction
       self.pause_confirmation_ticks = 0
-      self._log("armed", CS, max_turn_speed=self.max_turn_speed, mode="live" if self.live_sequence else "observe")
+      diagnostics = self._safe_diagnostic_fields(
+        CS, model, controls_state, car_control, car_output,
+      ) if self.logging_enabled else {}
+      self._log("armed", CS, max_turn_speed=self.max_turn_speed, mode="live" if self.live_sequence else "observe",
+                **diagnostics)
+      self._sample_diagnostics(CS, model, controls_state, car_control, car_output, force=True)
       return (PostTurnAction.pause if self.live_sequence else PostTurnAction.none), None
 
     # Gear-driven pauses (especially Reverse) belong to Feature 1. Cancel this
@@ -285,6 +426,7 @@ class PostTurnResume:
     if current_blinker_direction != "none" and current_blinker_direction != self.active_blinker_direction:
       self._extend_turn_sequence(CS, current_blinker_direction)
     self.active_blinker_direction = current_blinker_direction
+    self._sample_diagnostics(CS, model, controls_state, car_control, car_output)
 
     if self.live_sequence and lateral_active:
       self.pause_confirmation_ticks += 1

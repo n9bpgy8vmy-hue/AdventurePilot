@@ -19,7 +19,6 @@ if gui_app.sunnypilot_ui():
   from openpilot.selfdrive.ui.sunnypilot.onroad.driver_state import DriverStateRendererSP as DriverStateRenderer
   from openpilot.selfdrive.ui.sunnypilot.onroad.hud_renderer import HudRendererSP as HudRenderer
   from openpilot.selfdrive.ui.sunnypilot.ui_state import OnroadTimerStatus
-  from openpilot.selfdrive.ui.sunnypilot.onroad.curve_confidence import CurveConfidenceRenderer
 
 OpState = log.SelfdriveState.OpenpilotState
 CALIBRATED = log.LiveCalibrationData.Status.calibrated
@@ -57,7 +56,6 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
-    self.curve_confidence_renderer = CurveConfidenceRenderer() if gui_app.sunnypilot_ui() else None
 
   def _render(self, rect):
     # Only render when system is started to avoid invalid data access
@@ -90,20 +88,9 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     super()._render(rect)
 
     # Draw all UI overlays
-    if self.curve_confidence_renderer is not None:
-      try:
-        self.curve_confidence_renderer.update()
-        self.curve_confidence_renderer.render_background(self._content_rect)
-      except Exception as e:
-        self.curve_confidence_renderer._record_error_once("background_render_failure", e)
     self.model_renderer.render(self._content_rect)
     AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, self._content_rect)
     self._hud_renderer.render(self._content_rect)
-    if self.curve_confidence_renderer is not None:
-      try:
-        self.curve_confidence_renderer.render_banner(self._content_rect)
-      except Exception as e:
-        self.curve_confidence_renderer._record_error_once("banner_render_failure", e)
     self.alert_renderer.render(self._content_rect)
     self.driver_state_renderer.render(self._content_rect)
 

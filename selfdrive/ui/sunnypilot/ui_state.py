@@ -41,7 +41,6 @@ class UIStateSP:
     self.blindspot: bool = False
     self.chevron_metrics = None
     self.custom_interactive_timeout: int = 0
-    self.curve_confidence_indicator: bool = False
     self.developer_ui = None
     self.hide_v_ego_ui: bool = False
     self.onroad_brightness: int = 0
@@ -150,7 +149,6 @@ class UIStateSP:
     self.blindspot = self.params.get_bool("BlindSpot")
     self.chevron_metrics = self.params.get("ChevronInfo")
     self.custom_interactive_timeout = self.params.get("InteractivityTimeout", return_default=True)
-    self.curve_confidence_indicator = self.params.get_bool("RivianPilotCurveConfidenceIndicator")
     self.developer_ui = self.params.get("DevUIInfo")
     self.hide_v_ego_ui = self.params.get_bool("HideVEgoUI")
     self.onroad_brightness = int(float(self.params.get("OnroadScreenOffBrightness", return_default=True)))

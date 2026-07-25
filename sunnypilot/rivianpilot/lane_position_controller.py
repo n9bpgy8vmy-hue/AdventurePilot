@@ -46,6 +46,8 @@ class LanePositionController:
     self.pending_nudge_direction = 0
     self.faulted = False
     self.error_logged = False
+    self.diagnostic_faulted = False
+    self.diagnostic_error_logged = False
     self.get_params()
     self._publish(0.0)
 
@@ -76,7 +78,9 @@ class LanePositionController:
       self.feature_logging = False
 
   def _publish(self, offset_m: float) -> None:
-    output = offset_m if self.observe and self.go_live and not self.faulted else 0.0
+    # Go Live always includes observation. Do not require both toggles or run a
+    # second copy of the feature when both are enabled.
+    output = offset_m if self.go_live and not self.faulted else 0.0
     if self.last_output is None or abs(output - self.last_output) >= 0.001:
       self.params.put("RivianPilotDynamicCameraOffset", str(round(output, 4)), block=False)
       self.last_output = output
@@ -86,7 +90,7 @@ class LanePositionController:
       self.last_heartbeat = now
 
   @staticmethod
-  def _sample_geometry(model) -> tuple[float, float, float]:
+  def _sample_geometry(model) -> tuple[float, float, float, float, float, float, float]:
     probs = list(model.laneLineProbs)
     lines = list(model.laneLines)
     path_x = list(model.position.x)
@@ -110,8 +114,72 @@ class LanePositionController:
     width = high - low
     if not MIN_LANE_WIDTH_M <= width <= MAX_LANE_WIDTH_M:
       raise ValueError("implausible lane width")
-    clearance = min(path - low, high - path) - R1T_HALF_WIDTH_M - BOUNDARY_MARGIN_M
-    return width, path, max(0.0, clearance)
+    left_clearance = path - low - R1T_HALF_WIDTH_M - BOUNDARY_MARGIN_M
+    right_clearance = high - path - R1T_HALF_WIDTH_M - BOUNDARY_MARGIN_M
+    clearance = min(left_clearance, right_clearance)
+    return (width, path, max(0.0, clearance), max(0.0, left_clearance),
+            max(0.0, right_clearance), float(probs[1]), float(probs[2]))
+
+  @staticmethod
+  def _diagnostics(CS, model, controls, car_control=None, car_output=None) -> dict:
+    """Best-effort diagnostic fields; unavailable inputs never affect control."""
+    diagnostics = {}
+    try:
+      diagnostics["driver_torque"] = round(float(CS.steeringTorque), 3)
+      diagnostics["eps_torque"] = round(float(getattr(CS, "steeringTorqueEps", 0.0)), 3)
+      diagnostics["steering_angle_deg"] = round(float(getattr(CS, "steeringAngleDeg", 0.0)), 3)
+      diagnostics["steering_rate_deg_s"] = round(float(getattr(CS, "steeringRateDeg", 0.0)), 3)
+      diagnostics["yaw_rate_rad_s"] = round(float(getattr(CS, "yawRate", 0.0)), 4)
+      diagnostics["accel_ms2"] = round(float(getattr(CS, "aEgo", 0.0)), 3)
+    except (TypeError, ValueError, OverflowError):
+      pass
+    try:
+      actual_curvature = float(controls.curvature)
+      desired_curvature = float(controls.desiredCurvature)
+      if math.isfinite(actual_curvature) and math.isfinite(desired_curvature):
+        diagnostics["actual_curvature"] = round(actual_curvature, 7)
+        diagnostics["desired_curvature"] = round(desired_curvature, 7)
+        diagnostics["actual_lateral_accel_ms2"] = round(actual_curvature * float(CS.vEgo) ** 2, 3)
+        diagnostics["desired_lateral_accel_ms2"] = round(desired_curvature * float(CS.vEgo) ** 2, 3)
+      lateral_state = getattr(controls, "lateralControlState", None)
+      controller_type = lateral_state.which() if lateral_state is not None else "unavailable"
+      diagnostics["controller_type"] = controller_type
+      lateral_log = getattr(lateral_state, controller_type) if lateral_state is not None else None
+      diagnostics["controller_saturated"] = bool(getattr(lateral_log, "saturated", False))
+      diagnostics["controller_output"] = round(float(getattr(lateral_log, "output", 0.0)), 4)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+      pass
+    try:
+      diagnostics["requested_torque"] = round(float(car_control.actuators.torque), 4)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+      pass
+    try:
+      diagnostics["applied_torque"] = round(float(car_output.actuatorsOutput.torque), 4)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+      pass
+    try:
+      edge_stds = list(getattr(model, "roadEdgeStds", []))
+      diagnostics["left_road_edge_std"] = round(float(edge_stds[0]), 3) if len(edge_stds) >= 2 else None
+      diagnostics["right_road_edge_std"] = round(float(edge_stds[1]), 3) if len(edge_stds) >= 2 else None
+    except (TypeError, ValueError, OverflowError):
+      pass
+    return diagnostics
+
+  def _safe_diagnostics(self, CS, model, controls, car_control=None, car_output=None) -> dict:
+    if self.diagnostic_faulted:
+      return {}
+    try:
+      return self._diagnostics(CS, model, controls, car_control, car_output)
+    except Exception as e:
+      self.diagnostic_faulted = True
+      if not self.diagnostic_error_logged:
+        self.diagnostic_error_logged = True
+        try:
+          cloudlog.event("rivianpilot feature error", feature="lane_position_diagnostics",
+                         errors=["diagnostic_failure_suppressed"], error_type=type(e).__name__)
+        except Exception:
+          pass
+      return {}
 
   def _reset(self, reason: str) -> None:
     had_offset = self.last_output not in (None, 0.0) or self.nudge_direction != 0
@@ -122,7 +190,8 @@ class LanePositionController:
     if had_offset:
       self._log("reset", reason=reason)
 
-  def update(self, CS: structs.CarState, lat_active: bool, model, controls, now: float | None = None) -> None:
+  def update(self, CS: structs.CarState, lat_active: bool, model, controls, car_control=None,
+             car_output=None, now: float | None = None) -> None:
     now = time.monotonic() if now is None else now
     if now - self.last_param_read >= PARAM_REFRESH_SECONDS:
       self.get_params()
@@ -131,7 +200,7 @@ class LanePositionController:
       return
     self.last_update = now
 
-    if not self.observe:
+    if not (self.observe or self.go_live):
       self._reset("disabled")
       return
     if CS.gearShifter != structs.CarState.GearShifter.drive or not lat_active:
@@ -153,7 +222,7 @@ class LanePositionController:
       self._log("nudge_latched", direction=self.nudge_direction, hold_seconds=self.nudge_hold_seconds)
 
     try:
-      width, path, safe_offset = self._sample_geometry(model)
+      width, path, safe_offset, left_clearance, right_clearance, left_prob, right_prob = self._sample_geometry(model)
     except ValueError as e:
       self._reset(str(e))
       return
@@ -175,11 +244,17 @@ class LanePositionController:
 
     applied = math.copysign(min(abs(requested), safe_offset), requested) if requested else 0.0
     self._publish(applied)
+    diagnostics = self._safe_diagnostics(CS, model, controls, car_control, car_output) if self.feature_logging else {}
     self._log("sample", source=source, speed_ms=round(float(CS.vEgo), 3),
               curve_strength_pct=round(curve_strength, 1), requested_offset_m=round(requested, 4),
               safe_offset_m=round(safe_offset, 4), safety_capped_offset_m=round(applied, 4),
               published_offset_m=round(self.last_output or 0.0, 4),
-              lane_width_m=round(width, 3), path_y_m=round(path, 3), go_live=self.go_live)
+              lane_width_m=round(width, 3), path_y_m=round(path, 3),
+              left_boundary_clearance_m=round(left_clearance, 3),
+              right_boundary_clearance_m=round(right_clearance, 3),
+              left_lane_probability=round(left_prob, 3), right_lane_probability=round(right_prob, 3),
+              go_live=self.go_live, observe=self.observe,
+              **diagnostics)
 
   def suppress_after_error(self, exception: Exception) -> None:
     self.faulted = True

@@ -383,31 +383,6 @@
           ]
         },
         {
-          "id": "rivianpilot_curve_confidence",
-          "title": "RivianPilot Curve Confidence",
-          "description": "Show a visual warning when curve perception or lateral tracking confidence is reduced. This feature never changes steering or MADS.",
-          "items": [
-            {
-              "key": "RivianPilotCurveConfidenceIndicator",
-              "widget": "toggle",
-              "title": "Curve Confidence Indicator",
-              "description": "Use a translucent yellow or red screen wash and bottom warning while preserving the camera, path, lanes, vehicles, and native alerts.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "offroad_only"
-                }
-              ]
-            }
-          ]
-        },
-        {
           "id": "rivianpilot_lane_position",
           "title": "RivianPilot Lane Position",
           "description": "Apply a small, bounded lane-position preference on curves or after a deliberate steering nudge. Driver steering always overrides it.",
@@ -716,33 +691,6 @@
                   "type": "capability",
                   "field": "brand",
                   "equals": "rivian"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "id": "rivianpilot_blind_spot_observer",
-          "title": "RivianPilot Blind-Spot Observer",
-          "description": "Observe Rivian blind-spot signals and native lane-change decisions. This feature never changes steering or lane-change behavior.",
-          "items": [
-            {
-              "key": "RivianPilotBlindSpotObserver",
-              "widget": "toggle",
-              "title": "Observe Blind-Spot Signals",
-              "description": "Log bounded state transitions while one blinker is active. Requires RivianPilot Feature Diagnostics. Any observer error disables only this observer.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotFeatureLogging",
-                  "equals": true
                 }
               ]
             }
@@ -2147,12 +2095,6 @@
               "key": "QuietMode",
               "widget": "toggle",
               "title": "Quiet Mode"
-            },
-            {
-              "key": "RivianPilotStartupWelcome",
-              "widget": "toggle",
-              "title": "Startup Welcome",
-              "description": "Show a brief personalized welcome on the off-road home screen after RivianPilot starts. Set the displayed name from Device settings on the Comma."
             },
             {
               "key": "OnroadUploads",

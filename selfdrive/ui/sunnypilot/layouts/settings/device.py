@@ -10,7 +10,6 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.hardware import HARDWARE
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.sunnypilot.widgets.input_dialog import InputDialogSP
 from openpilot.system.ui.sunnypilot.widgets.list_view import option_item_sp, multiple_button_item_sp, button_item_sp, \
   dual_button_item_sp, Spacer
 from openpilot.system.ui.widgets import DialogResult
@@ -87,16 +86,6 @@ class DeviceLayoutSP(DeviceLayout):
     )
     self._quiet_mode_and_dcam.action_item.right_button.set_button_style(ButtonStyle.NORMAL)
 
-    self._startup_welcome = dual_button_item_sp(
-      left_text=lambda: tr("Startup Welcome"),
-      right_text=lambda: tr("Set Name"),
-      left_callback=lambda: ui_state.params.put_bool(
-        "RivianPilotStartupWelcome", not bool(ui_state.params.get("RivianPilotStartupWelcome", return_default=True))
-      ),
-      right_callback=self._set_startup_welcome_name,
-    )
-    self._startup_welcome.action_item.right_button.set_button_style(ButtonStyle.NORMAL)
-
     self._reg_and_training = dual_button_item_sp(
       left_text=lambda: tr("Regulatory"),
       left_callback=self._on_regulatory,
@@ -135,7 +124,6 @@ class DeviceLayoutSP(DeviceLayout):
       self._max_time_offroad,
       LineSeparator(height=10),
       self._quiet_mode_and_dcam,
-      self._startup_welcome,
       self._reg_and_training,
       self._onroad_uploads_and_reset_settings,
       Spacer(10),
@@ -144,25 +132,6 @@ class DeviceLayoutSP(DeviceLayout):
     ]
 
     return items
-
-  @staticmethod
-  def _set_startup_welcome_name():
-    current_name = ui_state.params.get("RivianPilotWelcomeName", return_default=True) or ""
-
-    def save_name(result: int, name: str):
-      if result != DialogResult.CONFIRM:
-        return
-
-      safe_name = "".join(c for c in name.strip() if c.isascii() and (c.isalnum() or c in " -'"))[:32].strip()
-      ui_state.params.put("RivianPilotWelcomeName", safe_name)
-
-    InputDialogSP(
-      title=tr("Startup Welcome Name"),
-      sub_title=tr("Enter the name shown when RivianPilot starts"),
-      current_text=current_name,
-      callback=save_name,
-      min_text_size=0,
-    ).show()
 
   def _offroad_transition(self):
     self._power_buttons.action_item.right_button.set_visible(ui_state.is_offroad())
@@ -239,12 +208,6 @@ class DeviceLayoutSP(DeviceLayout):
 
     # Quiet Mode button
     self._quiet_mode_and_dcam.action_item.left_button.set_button_style(ButtonStyle.PRIMARY if ui_state.params.get_bool("QuietMode") else ButtonStyle.NORMAL)
-
-    # Startup welcome
-    self._startup_welcome.action_item.left_button.set_button_style(
-      ButtonStyle.PRIMARY if ui_state.params.get("RivianPilotStartupWelcome", return_default=True) else ButtonStyle.NORMAL
-    )
-    self._startup_welcome.action_item.right_button.set_enabled(ui_state.is_offroad())
 
     # Onroad Uploads
     self._onroad_uploads_and_reset_settings.action_item.left_button.set_button_style(

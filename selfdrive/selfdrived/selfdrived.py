@@ -487,6 +487,7 @@ class SelfdriveD(CruiseHelper):
       try:
         self.lane_position_controller.update(
           CS, self.sm['carControl'].latActive, self.sm['modelV2'], self.sm['controlsState'],
+          self.sm['carControl'], self.sm['carOutput'],
         )
       except Exception as e:
         self.lane_position_controller.suppress_after_error(e)

@@ -177,6 +177,8 @@ class ModularAssistiveDrivingSystem:
       model_valid = self.selfdrive.sm.valid['modelV2'] and self.selfdrive.sm.recv_frame['modelV2'] > 0
       self.post_turn_action, warning_second = self.post_turn_resume.update(
         CS, self.selfdrive.sm['modelV2'], model_valid, self.active,
+        self.selfdrive.sm['controlsState'], self.selfdrive.sm['carControl'],
+        self.selfdrive.sm['carOutput'],
       )
       if warning_second is not None:
         self.events_sp.add(RIVIAN_MADS_RESUME_WARNING_EVENTS[warning_second])

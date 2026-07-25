@@ -7,13 +7,13 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.sunnypilot.rivianpilot.post_turn_resume import PostTurnAction, PostTurnResume
 
 
-def make_params(mocker, observe=True, go_live=True):
+def make_params(mocker, observe=True, go_live=True, logging=False):
   params = mocker.MagicMock()
   params.get_bool.side_effect = lambda key: {
     "RivianPostTurnObserve": observe,
     "RivianPostTurnGoLive": go_live,
     "RivianPostTurnRelaxedRoadEdges": False,
-    "RivianPilotFeatureLogging": False,
+    "RivianPilotFeatureLogging": logging,
     "IsMetric": False,
   }.get(key, False)
   params.get.side_effect = lambda key, **kwargs: {
@@ -39,12 +39,18 @@ def car_state(speed_mph=15, left=False, right=False):
 
 def model(left_prob=0.9, right_prob=0.9, left_edge=-2.0, right_edge=2.0,
           left_edge_std=0.2, right_edge_std=0.2, path_y=0.0):
-  line = lambda y: SimpleNamespace(y=[y] * 10)
+  def line(y):
+    return SimpleNamespace(y=[y] * 10)
   return SimpleNamespace(
     laneLineProbs=[0.0, left_prob, right_prob, 0.0],
     roadEdges=[line(left_edge), line(right_edge)],
     roadEdgeStds=[left_edge_std, right_edge_std],
     position=line(path_y),
+    meta=SimpleNamespace(
+      laneChangeState=0,
+      laneChangeDirection=0,
+      hardBrakePredicted=False,
+    ),
   )
 
 
@@ -78,6 +84,39 @@ def test_go_live_without_observe_fails_safe(mocker):
   action, warning = feature.update(car_state(left=True), model(), True, True)
   assert action == PostTurnAction.pause
   assert warning is None
+  assert feature.pending
+
+
+def test_high_speed_lane_change_is_observed_without_arming_control(mocker):
+  feature = PostTurnResume(make_params(mocker, logging=True))
+  event = mocker.patch("openpilot.sunnypilot.rivianpilot.post_turn_resume.cloudlog.event")
+  lane_model = model()
+  lane_model.meta.laneChangeState = 2
+  lane_model.meta.laneChangeDirection = 1
+  CS = car_state(speed_mph=55, left=True)
+  CS.steeringTorque = 1.2
+  CS.steeringTorqueEps = 0.4
+  CS.steeringRateDeg = 2.0
+
+  action, _ = feature.update(CS, lane_model, True, True)
+
+  assert action == PostTurnAction.none
+  assert not feature.pending
+  observation = next(call for call in event.call_args_list if call.kwargs.get("action") == "handover_observation")
+  assert observation.kwargs["driver_torque"] == 1.2
+  assert observation.kwargs["eps_torque"] == 0.4
+  assert observation.kwargs["left_blinker"]
+
+
+def test_handover_diagnostic_failure_does_not_disable_classic_resume(mocker):
+  feature = PostTurnResume(make_params(mocker, logging=True))
+  mocker.patch.object(feature, "_diagnostic_fields", side_effect=RuntimeError("diagnostic failure"))
+
+  action, _ = feature.update(car_state(left=True), model(), True, True)
+
+  assert action == PostTurnAction.pause
+  assert feature.diagnostic_faulted
+  assert not feature.faulted
   assert feature.pending
 
 
