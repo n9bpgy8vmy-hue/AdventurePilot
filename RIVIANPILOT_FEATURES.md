@@ -6,7 +6,7 @@ This file is the canonical definition and status of RivianPilot features. Do not
 
 Prevent unwanted lane centering while parking. After returning to Drive, MADS can resume above the configured speed following a configurable 1–5 second warning. Already-active MADS stays active if speed later falls below that threshold.
 
-Status: implemented, vehicle-tested, and validated as working exceptionally well. Reverse parking no longer causes unwanted lane centering, Drive resume behavior works as intended, and no regression to normal driving behavior has been reported.
+Status: release-ready. Implemented, extensively vehicle-tested, and validated as working exceptionally well. Reverse parking no longer causes unwanted lane centering, Drive resume behavior works as intended, and no regression to normal driving behavior has been reported. Preserve the validated behavior without further functional changes for this release.
 
 ## Feature 2 — Lane-hugging observer
 
