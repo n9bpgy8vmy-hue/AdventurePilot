@@ -8,7 +8,10 @@ from openpilot.common.swaglog import cloudlog
 
 
 R1T_HALF_WIDTH_M = 1.04
-BOUNDARY_MARGIN_M = 0.30
+# Keep a six-inch model-space buffer between the truck body and the requested
+# movement-side lane boundary. The previous twelve-inch buffer prevented useful
+# corrections even when moving away from the close boundary.
+BOUNDARY_MARGIN_M = 0.15
 SAMPLE_DISTANCE_M = 20.0
 MIN_LANE_PROBABILITY = 0.65
 MIN_LANE_WIDTH_M = 2.7
@@ -91,7 +94,7 @@ class LanePositionController:
       self.last_heartbeat = now
 
   @staticmethod
-  def _sample_geometry(model) -> tuple[float, float, float, float, float, float, float]:
+  def _sample_geometry(model) -> tuple[float, float, float, float, float, float]:
     probs = list(model.laneLineProbs)
     lines = list(model.laneLines)
     path_x = list(model.position.x)
@@ -111,15 +114,17 @@ class LanePositionController:
     path = float(path_y[path_index])
     if not all(math.isfinite(v) for v in (left, right, path)):
       raise ValueError("non-finite geometry")
-    low, high = sorted((left, right))
-    width = high - low
+    # openpilot lane coordinates are positive to driver-left. laneLines[1] is
+    # the current lane's left boundary and laneLines[2] is its right boundary.
+    if left <= right:
+      raise ValueError("lane orientation")
+    width = left - right
     if not MIN_LANE_WIDTH_M <= width <= MAX_LANE_WIDTH_M:
       raise ValueError("implausible lane width")
-    left_clearance = path - low - R1T_HALF_WIDTH_M - BOUNDARY_MARGIN_M
-    right_clearance = high - path - R1T_HALF_WIDTH_M - BOUNDARY_MARGIN_M
-    clearance = min(left_clearance, right_clearance)
-    return (width, path, max(0.0, clearance), max(0.0, left_clearance),
-            max(0.0, right_clearance), float(probs[1]), float(probs[2]))
+    driver_left_clearance = left - path - R1T_HALF_WIDTH_M - BOUNDARY_MARGIN_M
+    driver_right_clearance = path - right - R1T_HALF_WIDTH_M - BOUNDARY_MARGIN_M
+    return (width, path, max(0.0, driver_left_clearance),
+            max(0.0, driver_right_clearance), float(probs[1]), float(probs[2]))
 
   @staticmethod
   def _diagnostics(CS, model, controls, car_control=None, car_output=None) -> dict:
@@ -223,7 +228,7 @@ class LanePositionController:
       self._log("nudge_latched", direction=self.nudge_direction, hold_seconds=self.nudge_hold_seconds)
 
     try:
-      width, path, safe_offset, left_clearance, right_clearance, left_prob, right_prob = self._sample_geometry(model)
+      width, path, driver_left_clearance, driver_right_clearance, left_prob, right_prob = self._sample_geometry(model)
     except ValueError as e:
       self._reset(str(e))
       return
@@ -243,16 +248,22 @@ class LanePositionController:
         requested = -math.copysign(self.curve_offset_inches * 0.0254 * scale, lat_accel)
         source = "curve"
 
-    applied = math.copysign(min(abs(requested), safe_offset), requested) if requested else 0.0
+    # CameraOffset uses positive values for driver-left and negative values for
+    # driver-right. Only the boundary in the requested movement direction caps
+    # the offset; a close boundary must not block movement away from it.
+    movement_clearance = driver_left_clearance if requested > 0.0 else driver_right_clearance
+    applied = math.copysign(min(abs(requested), movement_clearance), requested) if requested else 0.0
     self._publish(applied)
     diagnostics = self._safe_diagnostics(CS, model, controls, car_control, car_output) if self.feature_logging else {}
     self._log("sample", source=source, speed_ms=round(float(CS.vEgo), 3),
               curve_strength_pct=round(curve_strength, 1), requested_offset_m=round(requested, 4),
-              safe_offset_m=round(safe_offset, 4), safety_capped_offset_m=round(applied, 4),
+              movement_clearance_m=round(movement_clearance, 4),
+              safety_capped_offset_m=round(applied, 4),
               published_offset_m=round(self.last_output or 0.0, 4),
               lane_width_m=round(width, 3), path_y_m=round(path, 3),
-              left_boundary_clearance_m=round(left_clearance, 3),
-              right_boundary_clearance_m=round(right_clearance, 3),
+              driver_left_clearance_m=round(driver_left_clearance, 3),
+              driver_right_clearance_m=round(driver_right_clearance, 3),
+              boundary_margin_m=BOUNDARY_MARGIN_M,
               left_lane_probability=round(left_prob, 3), right_lane_probability=round(right_prob, 3),
               go_live=self.go_live, observe=self.observe,
               **diagnostics)
