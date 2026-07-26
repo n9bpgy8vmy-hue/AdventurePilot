@@ -24,6 +24,8 @@ class PostTurnResume:
 
   LANE_PROB_MIN = 0.5
   STEERING_ANGLE_MAX_DEG = 15.0
+  DRIVER_TORQUE_ACTIVE_MIN = 1.5
+  STEERING_RATE_ACTIVE_MIN_DEG_S = 20.0
   YAW_RATE_MAX_RADS = 0.08
   PAUSE_CONFIRMATION_SECONDS = 0.5
   HIGH_SPEED_STABLE_SECONDS = 0.5
@@ -62,6 +64,7 @@ class PostTurnResume:
     self.road_edge_recovery_qualified = False
     self.road_edge_grace_ticks = 0
     self.last_road_edge_diagnostics = {}
+    self.light_steering_correction_active = False
     self.read_params()
 
   def read_params(self) -> None:
@@ -280,6 +283,7 @@ class PostTurnResume:
     self.road_edge_recovery_qualified = False
     self.road_edge_grace_ticks = 0
     self.last_road_edge_diagnostics = {}
+    self.light_steering_correction_active = False
 
   def _speed_factor(self) -> float:
     return CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
@@ -398,6 +402,37 @@ class PostTurnResume:
         return "road_edges_grace"
     return None
 
+  @staticmethod
+  def _finite_abs(value, fallback: float = math.inf) -> float:
+    try:
+      value = abs(float(value))
+      return value if math.isfinite(value) else fallback
+    except (TypeError, ValueError, OverflowError):
+      return fallback
+
+  def _driver_steering_active(self, CS: structs.CarState) -> bool:
+    """Separate deliberate steering from light road-camber corrections."""
+    if not CS.steeringPressed:
+      self.light_steering_correction_active = False
+      return False
+
+    driver_torque = self._finite_abs(getattr(CS, "steeringTorque", None))
+    steering_rate = self._finite_abs(getattr(CS, "steeringRateDeg", None))
+    active = (driver_torque >= self.DRIVER_TORQUE_ACTIVE_MIN or
+              steering_rate >= self.STEERING_RATE_ACTIVE_MIN_DEG_S)
+    if active:
+      self.light_steering_correction_active = False
+      return True
+
+    if not self.light_steering_correction_active:
+      self._log("light_steering_correction_allowed", CS,
+                driver_torque=round(driver_torque, 3),
+                steering_rate_deg_s=round(steering_rate, 3),
+                driver_torque_limit=self.DRIVER_TORQUE_ACTIVE_MIN,
+                steering_rate_limit_deg_s=self.STEERING_RATE_ACTIVE_MIN_DEG_S)
+    self.light_steering_correction_active = True
+    return False
+
   def _settled_reason(self, CS: structs.CarState) -> str | None:
     if self._one_blinker(CS):
       return "blinker_active"
@@ -405,7 +440,7 @@ class PostTurnResume:
       return "not_in_drive"
     if CS.vEgo < self.min_resume_speed * self._speed_factor():
       return "below_resume_speed"
-    if CS.steeringPressed:
+    if self._driver_steering_active(CS):
       return "driver_steering"
     if abs(CS.steeringAngleDeg) > self.STEERING_ANGLE_MAX_DEG:
       return "steering_not_straight"

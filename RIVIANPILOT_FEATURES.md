@@ -12,7 +12,7 @@ Status: release-ready and vehicle-tested. Preserve the validated behavior withou
 
 Pause MADS for a qualifying signaled low-speed manual turn, then warn and resume after detecting a stable lane or approved road-edge recovery path.
 
-Status: vehicle-tested and working well. `2026.007.002` does not change control behavior. It adds bounded, observation-only diagnostics for native Nudge, blinkers, steering/torque, lane-change state, manual turns, and resume timing so a separate Lane-Change-to-Turn feature can be designed from road data.
+Status: vehicle-tested. `2026.007.006` distinguishes light, near-straight road-camber corrections from deliberate steering using driver torque and steering rate. Light correction pressure no longer restarts the stability timer; strong torque, rapid steering, significant wheel angle, yaw, blinkers, speed, and lane/road-edge confidence continue to block resume. The decision is logged for road validation.
 
 ## Feature 3 — Lane Position
 

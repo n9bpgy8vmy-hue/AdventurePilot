@@ -32,6 +32,8 @@ def car_state(speed_mph=15, left=False, right=False):
   CS.leftBlinker = left
   CS.rightBlinker = right
   CS.steeringAngleDeg = 0
+  CS.steeringRateDeg = 0
+  CS.steeringTorque = 0
   CS.yawRate = 0
   CS.steeringPressed = False
   return CS
@@ -222,6 +224,7 @@ def test_high_speed_escape_still_waits_for_driver_steering(mocker):
   feature.update(high_speed, model(), True, False)
   assert feature.high_speed_lane_confirmed
   high_speed.steeringPressed = True
+  high_speed.steeringTorque = 2.0
   for _ in range(round(feature.HIGH_SPEED_STABLE_SECONDS / DT_CTRL) + 5):
     action, warning = feature.update(high_speed, model(left_prob=0.0, right_prob=0.0), False, False)
     assert action == PostTurnAction.waiting
@@ -245,6 +248,7 @@ def test_waits_for_blinker_driver_yaw_and_lane(mocker):
   cases.append((car_state(left=True), model(), True))
   steering = car_state()
   steering.steeringPressed = True
+  steering.steeringTorque = 2.0
   cases.append((steering, model(), True))
   yawing = car_state()
   yawing.yawRate = 0.09
@@ -257,6 +261,75 @@ def test_waits_for_blinker_driver_yaw_and_lane(mocker):
     assert action == PostTurnAction.waiting
     assert warning is None
     assert feature.stable_ticks == 0
+
+
+def test_light_steering_correction_on_slanted_road_allows_resume(mocker):
+  feature = PostTurnResume(make_params(mocker, logging=True))
+  event = mocker.patch("openpilot.sunnypilot.rivianpilot.post_turn_resume.cloudlog.event")
+  assert feature.update(car_state(right=True), model(), True, True)[0] == PostTurnAction.pause
+
+  correction = car_state(speed_mph=35)
+  correction.steeringPressed = True
+  correction.steeringTorque = 1.3
+  correction.steeringAngleDeg = 3.0
+  correction.steeringRateDeg = 2.0
+
+  assert run_until_resume(feature, correction, model())
+  assert any(call.kwargs.get("action") == "light_steering_correction_allowed"
+             for call in event.call_args_list)
+
+
+def test_strong_near_straight_driver_torque_blocks_resume(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  assert feature.update(car_state(right=True), model(), True, True)[0] == PostTurnAction.pause
+
+  takeover = car_state(speed_mph=35)
+  takeover.steeringPressed = True
+  takeover.steeringTorque = 1.8
+  takeover.steeringAngleDeg = 2.0
+  takeover.steeringRateDeg = 1.0
+  for _ in range(round((feature.stable_seconds + feature.resume_delay) / DT_CTRL) + 5):
+    action, warning = feature.update(takeover, model(), True, False)
+    assert action == PostTurnAction.waiting
+    assert warning is None
+
+  assert feature.stable_ticks == 0
+  assert feature.countdown == 0.0
+
+
+def test_rapid_near_straight_steering_blocks_resume(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  assert feature.update(car_state(left=True), model(), True, True)[0] == PostTurnAction.pause
+
+  takeover = car_state(speed_mph=35)
+  takeover.steeringPressed = True
+  takeover.steeringTorque = 1.0
+  takeover.steeringAngleDeg = 2.0
+  takeover.steeringRateDeg = 25.0
+  action, warning = feature.update(takeover, model(), True, False)
+
+  assert action == PostTurnAction.waiting
+  assert warning is None
+  assert feature.stable_ticks == 0
+
+
+def test_strong_driver_takeover_during_countdown_restarts_stability(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  assert feature.update(car_state(left=True), model(), True, True)[0] == PostTurnAction.pause
+  settled = car_state(speed_mph=35)
+  for _ in range(round(feature.HIGH_SPEED_STABLE_SECONDS / DT_CTRL) + 2):
+    feature.update(settled, model(), True, False)
+  assert feature.countdown > 0
+
+  takeover = car_state(speed_mph=35)
+  takeover.steeringPressed = True
+  takeover.steeringTorque = 2.0
+  action, warning = feature.update(takeover, model(), True, False)
+
+  assert action == PostTurnAction.waiting
+  assert warning is None
+  assert feature.stable_ticks == 0
+  assert feature.countdown == 0.0
 
 
 def test_stable_lane_then_countdown_resumes(mocker):
