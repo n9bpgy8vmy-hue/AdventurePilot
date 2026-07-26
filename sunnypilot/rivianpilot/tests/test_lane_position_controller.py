@@ -41,8 +41,8 @@ def model(probability=0.9, lane_half_width=1.8, path_y=0.0):
     laneLineProbs=[0.0, probability, probability, 0.0],
     laneLines=[
       SimpleNamespace(x=x, y=[0.0] * 4),
-      SimpleNamespace(x=x, y=[lane_half_width] * 4),
       SimpleNamespace(x=x, y=[-lane_half_width] * 4),
+      SimpleNamespace(x=x, y=[lane_half_width] * 4),
     ],
     position=SimpleNamespace(x=x, y=[path_y] * 4),
   )
@@ -53,6 +53,11 @@ def test_curve_offset_is_bounded_and_away_from_inside():
   feature = LanePositionController(p)
   feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
   assert feature.last_output < 0.0
+  assert abs(feature.last_output) <= 3 * 0.0254
+
+  feature = LanePositionController(p)
+  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=-0.002), now=1.0)
+  assert feature.last_output > 0.0
   assert abs(feature.last_output) <= 3 * 0.0254
 
 
@@ -66,12 +71,12 @@ def test_dynamic_offset_params_are_written_as_runtime_float_types():
   assert isinstance(heartbeat_write.args[1], float)
 
 
-def test_low_confidence_suppresses_feature():
+def test_low_confidence_does_not_block_bounded_automatic_curve_offset():
   p = params()
   feature = LanePositionController(p)
   feature.update(car_state(), True, model(probability=0.2), SimpleNamespace(desiredCurvature=0.002), now=1.0)
   assert not feature.faulted
-  assert feature.last_output == 0.0
+  assert feature.last_output == -3 * 0.0254
 
 
 def test_driver_input_immediately_publishes_zero_then_latches_nudge():
@@ -88,44 +93,84 @@ def test_driver_input_immediately_publishes_zero_then_latches_nudge():
   assert feature.last_output > 0.0
 
 
-def test_nudge_uses_clearance_in_requested_direction():
+def test_manual_nudge_is_authoritative_without_lane_geometry():
   p = params()
   feature = LanePositionController(p)
   cs = car_state()
-  close_to_right = model(path_y=-0.6)
-
-  # Positive CameraOffset moves the model center driver-left, away from the
-  # close right boundary, so the full configured nudge remains available.
   feature.nudge_direction = 1
   feature.nudge_until = 20.0
-  feature.update(cs, True, close_to_right, SimpleNamespace(desiredCurvature=0.0), now=1.0)
+  feature.update(cs, True, model(probability=0.0), SimpleNamespace(desiredCurvature=0.0), now=1.0)
   assert feature.last_output == 3 * 0.0254
 
-  # The same geometry must sharply limit a driver-right request toward that
-  # boundary to the small measured clearance, rather than the full nudge.
   feature = LanePositionController(p)
   feature.nudge_direction = -1
   feature.nudge_until = 20.0
-  feature.update(cs, True, close_to_right, SimpleNamespace(desiredCurvature=0.0), now=1.2)
-  assert -0.5 * 0.0254 < feature.last_output <= 0.0
+  feature.update(cs, True, model(probability=0.0), SimpleNamespace(desiredCurvature=0.0), now=1.2)
+  assert feature.last_output == -3 * 0.0254
 
 
-def test_directional_guard_is_symmetric():
+def test_automatic_guard_uses_only_movement_side_clearance():
+  p = params()
+  cs = car_state()
+  # Positive curvature is a left curve and requests movement driver-right.
+  # A close left/inside boundary must not cap that outward movement.
+  feature = LanePositionController(p)
+  feature.update(cs, True, model(lane_half_width=1.5, path_y=-0.3),
+                 SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  assert feature.last_output == -3 * 0.0254
+
+  # On the same left curve, a close right/outside boundary caps only movement
+  # toward that boundary.
+  feature = LanePositionController(p)
+  feature.update(cs, True, model(lane_half_width=1.5, path_y=0.3),
+                 SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  assert -3 * 0.0254 < feature.last_output <= 0.0
+
+
+def test_manual_nudge_cancels_and_suppresses_automatic_curve():
   p = params()
   feature = LanePositionController(p)
   cs = car_state()
-  close_to_left = model(path_y=0.6)
+  controls = SimpleNamespace(desiredCurvature=0.002)
+  feature.update(cs, True, model(), controls, now=1.0)
+  assert feature.last_output < 0.0
 
-  feature.nudge_direction = -1
-  feature.nudge_until = 20.0
-  feature.update(cs, True, close_to_left, SimpleNamespace(desiredCurvature=0.0), now=1.0)
-  assert feature.last_output == -3 * 0.0254
+  cs.steeringPressed = True
+  cs.steeringTorque = 2.0
+  feature.update(cs, True, model(), controls, now=1.2)
+  assert feature.last_output == 0.0
+  assert not feature.curve_active
 
+  cs.steeringPressed = False
+  cs.steeringTorque = 0.0
+  feature.update(cs, True, model(), controls, now=1.4)
+  assert feature.last_output == 3 * 0.0254
+  assert not feature.curve_active
+
+
+def test_wide_lane_hugging_adds_two_inch_automatic_bonus():
+  p = params()
   feature = LanePositionController(p)
-  feature.nudge_direction = 1
-  feature.nudge_until = 20.0
-  feature.update(cs, True, close_to_left, SimpleNamespace(desiredCurvature=0.0), now=1.2)
-  assert 0.0 <= feature.last_output < 0.5 * 0.0254
+  # Left curve, path hugging left/inside, ample room driver-right/outside.
+  feature.update(car_state(), True, model(lane_half_width=2.0, path_y=-0.5),
+                 SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  assert feature.last_output == -5 * 0.0254
+
+
+def test_curve_hysteresis_releases_below_eighty_percent_threshold():
+  p = params()
+  feature = LanePositionController(p)
+  cs = car_state()
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  assert feature.curve_active
+
+  # Thirty percent strength remains active below the 35% entry threshold but
+  # above the 28% release threshold.
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.001), now=1.2)
+  assert feature.curve_active
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.0005), now=1.4)
+  assert not feature.curve_active
+  assert feature.last_output == 0.0
 
 
 def test_observe_only_never_publishes_nonzero():
@@ -207,4 +252,35 @@ def test_blinker_cancels_offset():
   assert feature.last_output != 0.0
   cs.leftBlinker = True
   feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.2)
+  assert feature.last_output == 0.0
+
+
+def test_runtime_failure_falls_back_to_zero_and_stops_heartbeat():
+  p = params()
+  feature = LanePositionController(p)
+  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  assert feature.last_output != 0.0
+
+  heartbeat_writes = sum(call.args[0] == "RivianPilotDynamicCameraOffsetUpdated" for call in p.put.call_args_list)
+  feature.suppress_after_error(RuntimeError("injected failure"))
+
+  assert feature.faulted
+  assert feature.last_output == 0.0
+  zero_write = next(call for call in reversed(p.put.call_args_list)
+                    if call.args[0] == "RivianPilotDynamicCameraOffset")
+  assert zero_write.args[1] == 0.0
+  assert sum(call.args[0] == "RivianPilotDynamicCameraOffsetUpdated" for call in p.put.call_args_list) == heartbeat_writes + 1
+
+
+def test_params_write_failure_is_contained_by_outer_suppression():
+  p = params()
+  feature = LanePositionController(p)
+  p.put.side_effect = RuntimeError("injected params failure")
+
+  try:
+    feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  except RuntimeError as e:
+    feature.suppress_after_error(e)
+
+  assert feature.faulted
   assert feature.last_output == 0.0

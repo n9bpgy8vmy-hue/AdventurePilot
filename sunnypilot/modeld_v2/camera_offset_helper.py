@@ -4,12 +4,17 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+import math
+
 import numpy as np
 
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
 
 
 class CameraOffsetHelper:
+  MAX_RIVIANPILOT_DYNAMIC_OFFSET_M = 10.0 * 0.0254
+  RIVIANPILOT_HEARTBEAT_TIMEOUT_S = 1.0
+
   def __init__(self):
     self.camera_offset = 0.0
     self.actual_camera_offset = 0.0
@@ -22,6 +27,16 @@ class CameraOffsetHelper:
     shear[0, 2] = -offset_param / height * cy
     model_transform = (shear @ model_transform).astype(np.float32)
     return model_transform
+
+  @classmethod
+  def valid_rivianpilot_dynamic_offset(cls, offset, updated, now):
+    try:
+      return (math.isfinite(float(offset)) and
+              abs(float(offset)) <= cls.MAX_RIVIANPILOT_DYNAMIC_OFFSET_M and
+              math.isfinite(float(updated)) and
+              0.0 <= float(now) - float(updated) < cls.RIVIANPILOT_HEARTBEAT_TIMEOUT_S)
+    except (TypeError, ValueError, OverflowError):
+      return False
 
   def set_offset(self, offset, immediate=False):
     self.camera_offset = offset

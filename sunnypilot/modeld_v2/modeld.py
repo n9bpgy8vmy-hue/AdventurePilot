@@ -373,10 +373,12 @@ def main(demo=False):
       base_camera_offset = params.get("CameraOffset", return_default=True)
       dynamic_camera_offset = params.get("RivianPilotDynamicCameraOffset", return_default=True)
       dynamic_offset_updated = params.get("RivianPilotDynamicCameraOffsetUpdated", return_default=True)
-      dynamic_offset_fresh = time.monotonic() - dynamic_offset_updated < 1.0
+      dynamic_offset_valid = camera_offset_helper.valid_rivianpilot_dynamic_offset(
+        dynamic_camera_offset, dynamic_offset_updated, time.monotonic(),
+      )
       force_zero = (sm["carState"].steeringPressed or sm["carState"].leftBlinker or sm["carState"].rightBlinker or
                     sm["carState"].gearShifter != car.CarState.GearShifter.drive or
-                    not sm["carControl"].latActive or not dynamic_offset_fresh)
+                    not sm["carControl"].latActive or not dynamic_offset_valid)
       camera_offset_helper.set_offset(base_camera_offset + (0.0 if force_zero else dynamic_camera_offset),
                                       immediate=force_zero)
     lat_delay = model.lat_delay + model.LAT_SMOOTH_SECONDS
