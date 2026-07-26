@@ -102,6 +102,7 @@ def test_nudge_uses_clearance_in_requested_direction():
   assert feature.last_output == 3 * 0.0254
 
   # The same geometry must block a driver-right request toward that boundary.
+  feature = LanePositionController(p)
   feature.nudge_direction = -1
   feature.nudge_until = 20.0
   feature.update(cs, True, close_to_right, SimpleNamespace(desiredCurvature=0.0), now=1.2)
@@ -119,6 +120,7 @@ def test_directional_guard_is_symmetric():
   feature.update(cs, True, close_to_left, SimpleNamespace(desiredCurvature=0.0), now=1.0)
   assert feature.last_output == -3 * 0.0254
 
+  feature = LanePositionController(p)
   feature.nudge_direction = 1
   feature.nudge_until = 20.0
   feature.update(cs, True, close_to_left, SimpleNamespace(desiredCurvature=0.0), now=1.2)
