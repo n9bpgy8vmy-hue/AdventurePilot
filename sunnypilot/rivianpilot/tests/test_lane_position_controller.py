@@ -18,6 +18,7 @@ def params():
     "RivianPilotCurveThreshold": 35,
     "RivianPilotNudgeOffsetInches": 3,
     "RivianPilotNudgeHoldSeconds": 10,
+    "CameraOffset": 0.0,
   }
   p = MagicMock()
   p.get_bool.side_effect = lambda key: bool(values[key])
