@@ -247,6 +247,19 @@ sections:
     - type: param
       key: RivianPilotCurveOffset
       equals: true
+  - key: RivianPilotLanePositionRelaxed
+    widget: toggle
+    title: Allow Poorly Marked Roads
+    description: Without stable painted lane lines, permit at most two inches of curve offset. Leave off for strict lane-boundary behavior.
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - $ref: '#/macros/offroad'
+    - type: param
+      key: RivianPilotCurveOffset
+      equals: true
   - key: RivianPilotNudgeOffset
     widget: toggle
     title: Nudge Lane Offset

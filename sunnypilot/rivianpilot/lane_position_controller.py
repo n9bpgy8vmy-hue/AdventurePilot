@@ -8,15 +8,13 @@ from openpilot.common.swaglog import cloudlog
 
 
 INCH_TO_M = 0.0254
-# Rivian lists the R1T at 88.4 inches wide with mirrors open. This controller is
-# intentionally R1T-specific.
-R1T_WIDTH_WITH_MIRRORS_M = 88.4 * INCH_TO_M
-R1T_HALF_WIDTH_M = R1T_WIDTH_WITH_MIRRORS_M / 2.0
+# Rivian lists the R1T at 82.0 inches with the mirrors folded and 88.4 inches
+# with them open. Painted-lane containment uses the folded-width envelope:
+# mirrors can cross a painted line without the truck body or tires leaving it.
+R1T_LANE_ENVELOPE_M = 82.0 * INCH_TO_M
+R1T_HALF_LANE_ENVELOPE_M = R1T_LANE_ENVELOPE_M / 2.0
 BOUNDARY_MARGIN_M = 5.0 * INCH_TO_M
 MAX_CUSTOM_OFFSET_M = 10.0 * INCH_TO_M
-WIDE_LANE_MIN_M = 3.2
-WIDE_LANE_BONUS_M = 2.0 * INCH_TO_M
-HUGGING_DIFFERENCE_M = 2.0 * INCH_TO_M
 SAMPLE_DISTANCE_M = 20.0
 MIN_LANE_PROBABILITY = 0.65
 MIN_LANE_WIDTH_M = 2.7
@@ -27,6 +25,11 @@ PARAM_REFRESH_SECONDS = 1.0
 UPDATE_PERIOD_SECONDS = 0.1
 SAMPLE_LOG_PERIOD_SECONDS = 0.5
 CURVE_RELEASE_RATIO = 0.8
+CURVE_REFERENCE_SAMPLES = 3
+CURVE_GEOMETRY_MISS_LIMIT = 3
+CURVE_RAMP_IN_MPS = 3.0 * INCH_TO_M
+CURVE_RAMP_OUT_MPS = 8.0 * INCH_TO_M
+RELAXED_MAX_OFFSET_M = 2.0 * INCH_TO_M
 
 
 class LanePositionController:
@@ -42,6 +45,7 @@ class LanePositionController:
     self.go_live = False
     self.feature_logging = False
     self.curve_enabled = True
+    self.relaxed_geometry = False
     self.nudge_enabled = True
     self.curve_offset_inches = 3
     self.curve_threshold_pct = 35
@@ -56,6 +60,13 @@ class LanePositionController:
     self.nudge_until = 0.0
     self.pending_nudge_direction = 0
     self.curve_active = False
+    self.curve_direction = 0
+    self.curve_episode_id = 0
+    self.curve_episode_started = 0.0
+    self.curve_reference_samples = []
+    self.curve_reference_clearance = None
+    self.curve_geometry_misses = 0
+    self.automatic_output = 0.0
     self.faulted = False
     self.error_logged = False
     self.diagnostic_faulted = False
@@ -76,6 +87,7 @@ class LanePositionController:
     self.go_live = self.params.get_bool("RivianPilotLanePositionGoLive")
     self.feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
     self.curve_enabled = self.params.get_bool("RivianPilotCurveOffset")
+    self.relaxed_geometry = self.params.get_bool("RivianPilotLanePositionRelaxed")
     self.nudge_enabled = self.params.get_bool("RivianPilotNudgeOffset")
     self.curve_offset_inches = max(1, min(10, int(self.params.get("RivianPilotCurveOffsetInches", return_default=True))))
     self.curve_threshold_pct = max(10, min(90, int(self.params.get("RivianPilotCurveThreshold", return_default=True))))
@@ -139,8 +151,8 @@ class LanePositionController:
     width = right - left
     if not MIN_LANE_WIDTH_M <= width <= MAX_LANE_WIDTH_M:
       raise ValueError("implausible lane width")
-    driver_left_clearance = path - left - R1T_HALF_WIDTH_M - BOUNDARY_MARGIN_M
-    driver_right_clearance = right - path - R1T_HALF_WIDTH_M - BOUNDARY_MARGIN_M
+    driver_left_clearance = path - left - R1T_HALF_LANE_ENVELOPE_M - BOUNDARY_MARGIN_M
+    driver_right_clearance = right - path - R1T_HALF_LANE_ENVELOPE_M - BOUNDARY_MARGIN_M
     return (width, path, max(0.0, driver_left_clearance),
             max(0.0, driver_right_clearance), float(probs[1]), float(probs[2]))
 
@@ -219,6 +231,12 @@ class LanePositionController:
     self.nudge_until = 0.0
     self.pending_nudge_direction = 0
     self.curve_active = False
+    self.curve_direction = 0
+    self.curve_episode_started = 0.0
+    self.curve_reference_samples = []
+    self.curve_reference_clearance = None
+    self.curve_geometry_misses = 0
+    self.automatic_output = 0.0
     self._publish(0.0)
     if had_offset:
       self._log("reset", reason=reason)
@@ -231,6 +249,7 @@ class LanePositionController:
       self.last_param_read = now
     if self.faulted or now - self.last_update < UPDATE_PERIOD_SECONDS:
       return
+    update_dt = min(0.5, max(UPDATE_PERIOD_SECONDS, now - self.last_update)) if self.last_update > 0.0 else UPDATE_PERIOD_SECONDS
     self.last_update = now
 
     if not (self.observe or self.go_live):
@@ -246,6 +265,11 @@ class LanePositionController:
     torque = self._finite(CS.steeringTorque)
     if CS.steeringPressed:
       self.curve_active = False
+      self.curve_direction = 0
+      self.curve_reference_samples = []
+      self.curve_reference_clearance = None
+      self.curve_geometry_misses = 0
+      self.automatic_output = 0.0
       self.nudge_direction = 0
       self.nudge_until = 0.0
       self.pending_nudge_direction = 1 if torque > NUDGE_TORQUE_THRESHOLD else -1 if torque < -NUDGE_TORQUE_THRESHOLD else 0
@@ -266,9 +290,14 @@ class LanePositionController:
     geometry = None
     geometry_status = "not_needed"
     base_offset = 0.0
-    wide_lane_bonus = 0.0
     movement_clearance = None
     safety_capped = False
+    reference_state = "not_needed"
+    base_camera_offset = 0.0
+    try:
+      base_camera_offset = self._finite(self.params.get("CameraOffset", return_default=True))
+    except (TypeError, ValueError, OverflowError):
+      base_camera_offset = 0.0
     if self.nudge_direction and now < self.nudge_until:
       # Manual nudge is an explicit driver request. It is never canceled,
       # delayed, or capped by model lane confidence or geometry.
@@ -276,37 +305,99 @@ class LanePositionController:
       applied = requested
       source = "manual_authoritative"
       self.curve_active = False
+      self.curve_direction = 0
+      self.curve_reference_samples = []
+      self.curve_reference_clearance = None
+      self.curve_geometry_misses = 0
+      self.automatic_output = 0.0
     else:
       self.nudge_direction = 0
       release_threshold = self.curve_threshold_pct * CURVE_RELEASE_RATIO
-      self.curve_active = self.curve_enabled and (
+      was_curve_active = self.curve_active
+      next_curve_active = self.curve_enabled and (
         curve_strength >= (release_threshold if self.curve_active else self.curve_threshold_pct)
       )
+      next_curve_direction = 1 if lat_accel > 0.0 else -1 if lat_accel < 0.0 else 0
+      new_episode = next_curve_active and (
+        not was_curve_active or next_curve_direction != self.curve_direction
+      )
+      self.curve_active = next_curve_active
+      if new_episode:
+        self.curve_episode_id += 1
+        self.curve_episode_started = now
+        self.curve_direction = next_curve_direction
+        self.curve_reference_samples = []
+        self.curve_reference_clearance = None
+        self.curve_geometry_misses = 0
+        self.automatic_output = 0.0
+        self._log("curve_started", episode_id=self.curve_episode_id,
+                  turn_direction="left" if next_curve_direction > 0 else "right",
+                  configured_offset_inches=self.curve_offset_inches,
+                  configured_threshold_pct=self.curve_threshold_pct,
+                  base_camera_offset_m=round(base_camera_offset, 4))
       if self.curve_active and lat_accel != 0.0:
         # Positive CameraOffset moves driver-left. Move opposite the curve:
         # positive/left curvature requests negative/driver-right, and vice versa.
         base_offset = self.curve_offset_inches * INCH_TO_M
         requested = -math.copysign(base_offset, lat_accel)
-        source = "automatic_curve_guarded"
+        source = "automatic_curve_referenced"
         geometry, geometry_status = self._sample_geometry_if_authoritative(model)
         if geometry is not None:
           width, path, driver_left_clearance, driver_right_clearance, left_prob, right_prob = geometry
           movement_clearance = driver_left_clearance if requested > 0.0 else driver_right_clearance
-          inside_clearance = driver_left_clearance if lat_accel > 0.0 else driver_right_clearance
-          outside_clearance = movement_clearance
-          hugging_inside = inside_clearance + HUGGING_DIFFERENCE_M < outside_clearance
-          if (width >= WIDE_LANE_MIN_M and hugging_inside and
-              outside_clearance >= base_offset + WIDE_LANE_BONUS_M):
-            wide_lane_bonus = min(WIDE_LANE_BONUS_M, MAX_CUSTOM_OFFSET_M - base_offset)
-            requested = math.copysign(base_offset + wide_lane_bonus, requested)
-          applied = math.copysign(min(abs(requested), movement_clearance), requested)
-          safety_capped = abs(applied) + 1e-6 < abs(requested)
+          self.curve_geometry_misses = 0
+          # Capture clearance before applying an offset. Holding this reference
+          # for the curve prevents the offset from canceling itself on the next
+          # model cycle.
+          if self.curve_reference_clearance is None:
+            self.curve_reference_samples.append(movement_clearance)
+            if len(self.curve_reference_samples) >= CURVE_REFERENCE_SAMPLES:
+              ordered = sorted(self.curve_reference_samples)
+              self.curve_reference_clearance = ordered[len(ordered) // 2]
+              self._log("curve_reference_ready", episode_id=self.curve_episode_id,
+                        reference_clearance_m=round(self.curve_reference_clearance, 4),
+                        lane_width_m=round(width, 3))
+          reference_state = "ready" if self.curve_reference_clearance is not None else "collecting"
         else:
-          # The fixed, bounded curve offset remains available without lane
-          # lines; an authoritative target-side boundary can only reduce it.
-          applied = requested
+          self.curve_geometry_misses += 1
+          reference_state = "missing"
+
+        if self.curve_reference_clearance is not None and self.curve_geometry_misses < CURVE_GEOMETRY_MISS_LIMIT:
+          target = math.copysign(min(abs(requested), self.curve_reference_clearance), requested)
+          safety_capped = abs(target) + 1e-6 < abs(requested)
+        elif self.relaxed_geometry and self.curve_geometry_misses >= CURVE_GEOMETRY_MISS_LIMIT:
+          # Explicit opt-in for poorly marked roads. This never exceeds two
+          # inches and remains subordinate to driver steering and core control.
+          target = math.copysign(min(abs(requested), RELAXED_MAX_OFFSET_M), requested)
+          reference_state = "relaxed"
+          safety_capped = abs(target) + 1e-6 < abs(requested)
+        else:
+          # Automatic movement waits for a clean painted-lane reference and
+          # ramps out after persistent geometry loss. Core behavior remains.
+          target = 0.0
+          safety_capped = True
+
+        rate = CURVE_RAMP_IN_MPS if abs(target) > abs(self.automatic_output) else CURVE_RAMP_OUT_MPS
+        max_step = rate * update_dt
+        delta = max(-max_step, min(max_step, target - self.automatic_output))
+        self.automatic_output += delta
+        if abs(self.automatic_output) < 1e-6:
+          self.automatic_output = 0.0
+        applied = self.automatic_output
       else:
-        applied = 0.0
+        target = 0.0
+        reference_state = "releasing" if abs(self.automatic_output) > 0.0 else "inactive"
+        max_step = CURVE_RAMP_OUT_MPS * update_dt
+        delta = max(-max_step, min(max_step, target - self.automatic_output))
+        self.automatic_output += delta
+        if abs(self.automatic_output) < 1e-6:
+          self.automatic_output = 0.0
+          self.curve_direction = 0
+          self.curve_episode_started = 0.0
+          self.curve_reference_samples = []
+          self.curve_reference_clearance = None
+          self.curve_geometry_misses = 0
+        applied = self.automatic_output
 
     self._publish(applied)
     diagnostics = self._safe_diagnostics(CS, model, controls, car_control, car_output) if self.feature_logging else {}
@@ -326,12 +417,23 @@ class LanePositionController:
                 turn_direction="left" if lat_accel > 0.0 else "right" if lat_accel < 0.0 else "straight",
                 movement_direction="left" if applied > 0.0 else "right" if applied < 0.0 else "none",
                 curve_strength_pct=round(curve_strength, 1),
-                base_offset_m=round(base_offset, 4), wide_lane_bonus_m=round(wide_lane_bonus, 4),
+                episode_id=self.curve_episode_id if source.startswith("automatic_curve") else None,
+                episode_age_s=round(now - self.curve_episode_started, 2) if self.curve_episode_started else None,
+                configured_offset_inches=self.curve_offset_inches,
+                configured_threshold_pct=self.curve_threshold_pct,
+                relaxed_geometry=self.relaxed_geometry,
+                base_offset_m=round(base_offset, 4),
                 requested_offset_m=round(requested, 4),
                 movement_clearance_m=round(movement_clearance, 4) if movement_clearance is not None else None,
+                reference_clearance_m=round(self.curve_reference_clearance, 4)
+                if self.curve_reference_clearance is not None else None,
+                reference_state=reference_state,
+                geometry_miss_count=self.curve_geometry_misses,
                 safety_capped_offset_m=round(applied, 4), safety_capped=safety_capped,
                 published_offset_m=round(self.last_output or 0.0, 4),
-                geometry_status=geometry_status, r1t_width_with_mirrors_m=round(R1T_WIDTH_WITH_MIRRORS_M, 4),
+                base_camera_offset_m=round(base_camera_offset, 4),
+                effective_target_offset_m=round(base_camera_offset + applied, 4),
+                geometry_status=geometry_status, r1t_lane_envelope_m=round(R1T_LANE_ENVELOPE_M, 4),
                 boundary_margin_m=BOUNDARY_MARGIN_M, go_live=self.go_live, observe=self.observe,
                 **lane_fields, **diagnostics)
       self.last_sample_log = now

@@ -12,6 +12,7 @@ def params():
     "RivianPilotLanePositionGoLive": True,
     "RivianPilotFeatureLogging": False,
     "RivianPilotCurveOffset": True,
+    "RivianPilotLanePositionRelaxed": False,
     "RivianPilotNudgeOffset": True,
     "RivianPilotCurveOffsetInches": 3,
     "RivianPilotCurveThreshold": 35,
@@ -48,15 +49,24 @@ def model(probability=0.9, lane_half_width=1.8, path_y=0.0):
   )
 
 
+def establish_curve(feature, cs=None, road_model=None, curvature=0.002, start=1.0):
+  cs = cs or car_state()
+  road_model = road_model or model()
+  controls = SimpleNamespace(desiredCurvature=curvature)
+  for now in (start, start + 0.2, start + 0.4, start + 0.9, start + 1.4):
+    feature.update(cs, True, road_model, controls, now=now)
+  return controls
+
+
 def test_curve_offset_is_bounded_and_away_from_inside():
   p = params()
   feature = LanePositionController(p)
-  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  establish_curve(feature, curvature=0.002)
   assert feature.last_output < 0.0
   assert abs(feature.last_output) <= 3 * 0.0254
 
   feature = LanePositionController(p)
-  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=-0.002), now=1.0)
+  establish_curve(feature, curvature=-0.002)
   assert feature.last_output > 0.0
   assert abs(feature.last_output) <= 3 * 0.0254
 
@@ -71,12 +81,21 @@ def test_dynamic_offset_params_are_written_as_runtime_float_types():
   assert isinstance(heartbeat_write.args[1], float)
 
 
-def test_low_confidence_does_not_block_bounded_automatic_curve_offset():
+def test_low_confidence_blocks_automatic_curve_offset():
   p = params()
   feature = LanePositionController(p)
-  feature.update(car_state(), True, model(probability=0.2), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  establish_curve(feature, road_model=model(probability=0.2))
   assert not feature.faulted
-  assert feature.last_output == -3 * 0.0254
+  assert feature.last_output == 0.0
+
+
+def test_relaxed_geometry_is_explicit_and_bounded_to_two_inches():
+  p = params()
+  original_get_bool = p.get_bool.side_effect
+  p.get_bool.side_effect = lambda key: True if key == "RivianPilotLanePositionRelaxed" else original_get_bool(key)
+  feature = LanePositionController(p)
+  establish_curve(feature, road_model=model(probability=0.2))
+  assert feature.last_output == -2 * 0.0254
 
 
 def test_driver_input_immediately_publishes_zero_then_latches_nudge():
@@ -115,15 +134,13 @@ def test_automatic_guard_uses_only_movement_side_clearance():
   # Positive curvature is a left curve and requests movement driver-right.
   # A close left/inside boundary must not cap that outward movement.
   feature = LanePositionController(p)
-  feature.update(cs, True, model(lane_half_width=1.5, path_y=-0.3),
-                 SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  establish_curve(feature, cs, model(lane_half_width=1.5, path_y=-0.3))
   assert feature.last_output == -3 * 0.0254
 
   # On the same left curve, a close right/outside boundary caps only movement
   # toward that boundary.
   feature = LanePositionController(p)
-  feature.update(cs, True, model(lane_half_width=1.5, path_y=0.3),
-                 SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  establish_curve(feature, cs, model(lane_half_width=1.5, path_y=0.3))
   assert -3 * 0.0254 < feature.last_output <= 0.0
 
 
@@ -131,44 +148,77 @@ def test_manual_nudge_cancels_and_suppresses_automatic_curve():
   p = params()
   feature = LanePositionController(p)
   cs = car_state()
-  controls = SimpleNamespace(desiredCurvature=0.002)
-  feature.update(cs, True, model(), controls, now=1.0)
+  controls = establish_curve(feature, cs)
   assert feature.last_output < 0.0
 
   cs.steeringPressed = True
   cs.steeringTorque = 2.0
-  feature.update(cs, True, model(), controls, now=1.2)
+  feature.update(cs, True, model(), controls, now=2.6)
   assert feature.last_output == 0.0
   assert not feature.curve_active
 
   cs.steeringPressed = False
   cs.steeringTorque = 0.0
-  feature.update(cs, True, model(), controls, now=1.4)
+  feature.update(cs, True, model(), controls, now=2.8)
   assert feature.last_output == 3 * 0.0254
   assert not feature.curve_active
 
 
-def test_wide_lane_hugging_adds_two_inch_automatic_bonus():
+def test_wide_lane_never_exceeds_configured_curve_offset():
   p = params()
   feature = LanePositionController(p)
-  # Left curve, path hugging left/inside, ample room driver-right/outside.
-  feature.update(car_state(), True, model(lane_half_width=2.0, path_y=-0.5),
-                 SimpleNamespace(desiredCurvature=0.002), now=1.0)
-  assert feature.last_output == -5 * 0.0254
+  establish_curve(feature, road_model=model(lane_half_width=2.0, path_y=-0.5))
+  assert feature.last_output == -3 * 0.0254
+
+
+def test_curve_reference_is_captured_before_offset_and_held_for_episode():
+  p = params()
+  feature = LanePositionController(p)
+  cs = car_state()
+  controls = SimpleNamespace(desiredCurvature=0.002)
+  original_model = model(lane_half_width=1.8, path_y=0.0)
+  for now in (1.0, 1.2, 1.4, 1.9, 2.4):
+    feature.update(cs, True, original_model, controls, now=now)
+  reference = feature.curve_reference_clearance
+  assert reference is not None
+  assert feature.last_output == -3 * 0.0254
+
+  # Simulate the model path reacting to the camera transform. The pre-offset
+  # reference remains stable instead of canceling the feature's own output.
+  feature.update(cs, True, model(lane_half_width=1.8, path_y=0.5), controls, now=2.6)
+  assert feature.curve_reference_clearance == reference
+  assert feature.last_output == -3 * 0.0254
+
+
+def test_persistent_geometry_loss_ramps_automatic_offset_out():
+  p = params()
+  feature = LanePositionController(p)
+  cs = car_state()
+  controls = establish_curve(feature, cs)
+  assert feature.last_output < 0.0
+
+  weak_model = model(probability=0.2)
+  feature.update(cs, True, weak_model, controls, now=2.6)
+  feature.update(cs, True, weak_model, controls, now=2.8)
+  assert feature.last_output < 0.0
+  feature.update(cs, True, weak_model, controls, now=3.0)
+  assert -3 * 0.0254 < feature.last_output < 0.0
+  feature.update(cs, True, weak_model, controls, now=3.2)
+  assert feature.last_output == 0.0
 
 
 def test_curve_hysteresis_releases_below_eighty_percent_threshold():
   p = params()
   feature = LanePositionController(p)
   cs = car_state()
-  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  establish_curve(feature, cs)
   assert feature.curve_active
 
   # Thirty percent strength remains active below the 35% entry threshold but
   # above the 28% release threshold.
-  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.001), now=1.2)
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.001), now=2.6)
   assert feature.curve_active
-  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.0005), now=1.4)
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.0005), now=3.0)
   assert not feature.curve_active
   assert feature.last_output == 0.0
 
@@ -177,10 +227,10 @@ def test_observe_only_never_publishes_nonzero():
   p = params()
   p.get_bool.side_effect = lambda key: False if key == "RivianPilotLanePositionGoLive" else bool({
     "RivianPilotLanePositionObserve": True, "RivianPilotFeatureLogging": False,
-    "RivianPilotCurveOffset": True, "RivianPilotNudgeOffset": True,
+    "RivianPilotCurveOffset": True, "RivianPilotLanePositionRelaxed": False, "RivianPilotNudgeOffset": True,
   }[key])
   feature = LanePositionController(p)
-  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  establish_curve(feature)
   assert feature.last_output == 0.0
 
 
@@ -188,11 +238,11 @@ def test_go_live_includes_observation_without_requiring_observe():
   p = params()
   p.get_bool.side_effect = lambda key: bool({
     "RivianPilotLanePositionObserve": False, "RivianPilotLanePositionGoLive": True,
-    "RivianPilotFeatureLogging": False, "RivianPilotCurveOffset": True,
+    "RivianPilotFeatureLogging": False, "RivianPilotCurveOffset": True, "RivianPilotLanePositionRelaxed": False,
     "RivianPilotNudgeOffset": True,
   }[key])
   feature = LanePositionController(p)
-  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  establish_curve(feature)
   assert feature.last_output < 0.0
 
 
@@ -200,7 +250,7 @@ def test_go_live_logs_torque_and_controller_diagnostics(mocker):
   p = params()
   p.get_bool.side_effect = lambda key: bool({
     "RivianPilotLanePositionObserve": True, "RivianPilotLanePositionGoLive": True,
-    "RivianPilotFeatureLogging": True, "RivianPilotCurveOffset": True,
+    "RivianPilotFeatureLogging": True, "RivianPilotCurveOffset": True, "RivianPilotLanePositionRelaxed": False,
     "RivianPilotNudgeOffset": True,
   }[key])
   feature = LanePositionController(p)
@@ -231,7 +281,7 @@ def test_diagnostic_failure_does_not_disable_lane_position(mocker):
   p = params()
   p.get_bool.side_effect = lambda key: bool({
     "RivianPilotLanePositionObserve": True, "RivianPilotLanePositionGoLive": True,
-    "RivianPilotFeatureLogging": True, "RivianPilotCurveOffset": True,
+    "RivianPilotFeatureLogging": True, "RivianPilotCurveOffset": True, "RivianPilotLanePositionRelaxed": False,
     "RivianPilotNudgeOffset": True,
   }[key])
   feature = LanePositionController(p)
@@ -241,24 +291,24 @@ def test_diagnostic_failure_does_not_disable_lane_position(mocker):
 
   assert feature.diagnostic_faulted
   assert not feature.faulted
-  assert feature.last_output < 0.0
+  assert feature.last_output == 0.0
 
 
 def test_blinker_cancels_offset():
   p = params()
   feature = LanePositionController(p)
   cs = car_state()
-  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  establish_curve(feature, cs)
   assert feature.last_output != 0.0
   cs.leftBlinker = True
-  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.2)
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.002), now=2.6)
   assert feature.last_output == 0.0
 
 
 def test_runtime_failure_falls_back_to_zero_and_stops_heartbeat():
   p = params()
   feature = LanePositionController(p)
-  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
+  establish_curve(feature)
   assert feature.last_output != 0.0
 
   heartbeat_writes = sum(call.args[0] == "RivianPilotDynamicCameraOffsetUpdated" for call in p.put.call_args_list)
