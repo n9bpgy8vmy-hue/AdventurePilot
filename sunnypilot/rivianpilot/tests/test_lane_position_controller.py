@@ -328,10 +328,12 @@ def test_params_write_failure_is_contained_by_outer_suppression():
   feature = LanePositionController(p)
   p.put.side_effect = RuntimeError("injected params failure")
 
-  try:
-    feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=1.0)
-  except RuntimeError as e:
-    feature.suppress_after_error(e)
+  for now in (1.0, 1.2, 1.4):
+    try:
+      feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.002), now=now)
+    except RuntimeError as e:
+      feature.suppress_after_error(e)
+      break
 
   assert feature.faulted
   assert feature.last_output == 0.0
