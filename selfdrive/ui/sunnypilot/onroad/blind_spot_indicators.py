@@ -9,10 +9,13 @@ import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.filter_simple import FirstOrderFilter
+from openpilot.common.params import Params
+from openpilot.sunnypilot.rivianpilot.vision_bsm import get_fresh_vision_bsm_state
 
 
 class BlindSpotIndicators:
   def __init__(self):
+    self._params_memory = Params(memory=True)
     self._txt_blind_spot_left: rl.Texture = gui_app.texture('icons_mici/onroad/blind_spot_left.png', 108, 128)
     self._txt_blind_spot_right: rl.Texture = gui_app.texture('icons_mici/onroad/blind_spot_left.png', 108, 128, flip_x=True)
 
@@ -22,9 +25,10 @@ class BlindSpotIndicators:
   def update(self) -> None:
     sm = ui_state.sm
     CS = sm['carState']
+    vision_bsm = get_fresh_vision_bsm_state(self._params_memory)
 
-    self._blind_spot_left_alpha_filter.update(1.0 if CS.leftBlindspot else 0.0)
-    self._blind_spot_right_alpha_filter.update(1.0 if CS.rightBlindspot else 0.0)
+    self._blind_spot_left_alpha_filter.update(1.0 if CS.leftBlindspot or vision_bsm.left else 0.0)
+    self._blind_spot_right_alpha_filter.update(1.0 if CS.rightBlindspot or vision_bsm.right else 0.0)
 
   @property
   def detected(self) -> bool:

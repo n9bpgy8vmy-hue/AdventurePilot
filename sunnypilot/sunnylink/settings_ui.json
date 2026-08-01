@@ -980,6 +980,99 @@
           ]
         },
         {
+          "id": "rivianpilot_vision_bsm",
+          "title": "RivianPilot Vision Blind-Spot Monitor",
+          "description": "Optional PR",
+          "items": [
+            {
+              "key": "RivianPilotVisionBSMEnabled",
+              "widget": "toggle",
+              "title": "Enable Vision Blind-Spot Monitor",
+              "description": "Use the configured driver-camera regions as an additional blind-spot veto. A cancelled request requires a fresh nudge or blinker cycle.",
+              "details": "Experimental supplemental detection only. Continue checking mirrors and surroundings. Requires a valid PR",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "offroad_only"
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotVisionBSMLoudAlert",
+              "widget": "toggle",
+              "title": "Loud Blind-Spot Alert",
+              "description": "Play a warning sound when Vision BSM cancels a requested lane change. A visual cancellation message remains active when this is off.",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotVisionBSMEnabled",
+                  "equals": true
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotVisionBSMConfidenceThreshold",
+              "widget": "option",
+              "title": "Detection Confidence",
+              "description": "Minimum PR",
+              "min": 0.25,
+              "max": 1.0,
+              "step": 0.05,
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotVisionBSMEnabled",
+                  "equals": true
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotVisionBSMSmoothSeconds",
+              "widget": "option",
+              "title": "Detection Smoothing",
+              "description": "Smooth short confidence changes to reduce flickering.",
+              "min": 0.1,
+              "max": 0.5,
+              "step": 0.1,
+              "unit": "seconds",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotVisionBSMEnabled",
+                  "equals": true
+                }
+              ]
+            }
+          ]
+        },
+        {
           "id": "lane_change",
           "title": "Lane Change",
           "description": "Automatic lane change timing and behavior",

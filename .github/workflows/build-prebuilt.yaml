@@ -20,7 +20,7 @@ name: Build Prebuilt
 
 on:
   push:
-    branches: [ rel-src, stg-src, apdev, rpdev ]
+    branches: [ rel-src, stg-src, apdev, rpdev, rpdev-vbsm ]
   workflow_dispatch:
     inputs:
       source_branch:
@@ -126,6 +126,9 @@ jobs:
               sunnypilot/rivianpilot/tests/test_post_turn_resume.py \
               sunnypilot/rivianpilot/tests/test_manual_turn_recorder.py \
               sunnypilot/rivianpilot/tests/test_lane_position_controller.py \
+              sunnypilot/rivianpilot/tests/test_vision_bsm.py \
+              sunnypilot/rivianpilot/tests/test_vision_bsm_inference.py \
+              system/manager/test/test_rivian_vision_bsm_process.py \
               sunnypilot/modeld_v2/tests/test_camera_offset_helper.py
 
       - name: Validate RivianPilot Sunnylink settings

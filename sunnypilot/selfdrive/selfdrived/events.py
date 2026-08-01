@@ -274,4 +274,18 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       AlertStatus.normal, AlertSize.small,
       Priority.HIGH, VisualAlert.none, AudibleAlertSP.promptDouble, 2.),
   },
+  EventNameSP.rivianPilotVisionBSMBlocked: {
+    ET.PERMANENT: Alert(
+      "Car Detected in Blind Spot",
+      "Lane Change Cancelled",
+      AlertStatus.userPrompt, AlertSize.small,
+      Priority.HIGH, VisualAlert.none, AudibleAlert.none, 1.),
+  },
+  EventNameSP.rivianPilotVisionBSMBlockedLoud: {
+    ET.PERMANENT: Alert(
+      "Car Detected in Blind Spot",
+      "Lane Change Cancelled",
+      AlertStatus.userPrompt, AlertSize.small,
+      Priority.HIGH, VisualAlert.none, AudibleAlert.prompt, 1.),
+  },
 }

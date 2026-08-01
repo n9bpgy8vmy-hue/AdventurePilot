@@ -51,11 +51,26 @@ Provide a supplemental, model-based visual/audio collision warning without braki
 
 Status: backlog. Observe-only validation must precede alerts.
 
+## Feature 8 — Vision Blind-Spot Monitor
+
+Use the driver-camera V-ASM detector from StarPilot PR #75 as an optional supplemental lane-change veto. Existing Nudge or blinker-only configuration remains authoritative. A detection can cancel a pending request but never initiates a lane change or sends steering commands.
+
+Phase 1 behavior:
+
+- Off restores the existing lane-change behavior exactly.
+- A Nudge made while the corresponding side is detected is consumed; torque must be released and a fresh Nudge supplied after the detection clears.
+- A blinker-only request detected as occupied is cancelled; the blinker must be cycled off and on before another request.
+- An already-started lane change is not reversed by the detector.
+- Visual cancellation is always shown; sound is controlled independently by `RivianPilotVisionBSMLoudAlert`.
+- Missing, stale, overloaded, or failed detector output cannot generate steering and falls back to existing lane-change behavior.
+
+Status: experimental, default off. Based on the hardened OpenCV integration following StarPilot PR #75. Vehicle-camera polygon calibration and parked validation are required before road evaluation.
+
 ## Removed or retired
 
 - Lane-hugging observer
 - Navigation/turn assistance
-- Blind-spot observer and current-lane boundary guard
+- Current-lane boundary guard
 - Custom Curve Confidence Indicator
 - Redundant Lane Position Preference backlog entry
 - Steering Smoothness Slider

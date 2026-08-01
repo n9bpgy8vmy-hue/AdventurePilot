@@ -27,6 +27,7 @@ from openpilot.system.hardware import HARDWARE
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
 from openpilot.sunnypilot.rivianpilot.lane_position_controller import LanePositionController
 from openpilot.sunnypilot.rivianpilot.manual_turn_recorder import ManualTurnRecorder
+from openpilot.sunnypilot.rivianpilot.vision_bsm import get_vision_bsm_block
 from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
@@ -58,6 +59,7 @@ IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 class SelfdriveD(CruiseHelper):
   def __init__(self, CP=None, CP_SP=None):
     self.params = Params()
+    self.params_memory = Params(memory=True)
 
     # Ensure the current branch is cached, otherwise the first cycle lags
     build_metadata = get_build_metadata()
@@ -113,6 +115,8 @@ class SelfdriveD(CruiseHelper):
     self.is_metric = self.params.get_bool("IsMetric")
     self.is_ldw_enabled = self.params.get_bool("IsLdwEnabled")
     self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
+    self.vision_bsm_enabled = self.params.get_bool("RivianPilotVisionBSMEnabled")
+    self.vision_bsm_loud_alert = self.params.get_bool("RivianPilotVisionBSMLoudAlert")
 
     car_recognized = self.CP.brand != 'mock'
 
@@ -354,6 +358,16 @@ class SelfdriveD(CruiseHelper):
     elif self.sm['modelV2'].meta.laneChangeState in (LaneChangeState.laneChangeStarting,
                                                     LaneChangeState.laneChangeFinishing):
       self.events.add(EventName.laneChange)
+
+    if self.CP.brand == "rivian" and self.vision_bsm_enabled:
+      blocked_side, _ = get_vision_bsm_block(self.params_memory)
+      matching_blinker = ((blocked_side == "left" and CS.leftBlinker) or
+                          (blocked_side == "right" and CS.rightBlinker))
+      if matching_blinker:
+        event = (EventNameSP.rivianPilotVisionBSMBlockedLoud
+                 if self.vision_bsm_loud_alert
+                 else EventNameSP.rivianPilotVisionBSMBlocked)
+        self.events_sp.add(event)
 
     # Handle lane turn
     lane_turn_direction = self.sm['modelDataV2SP'].laneTurnDirection
@@ -661,6 +675,8 @@ class SelfdriveD(CruiseHelper):
       self.is_metric = self.params.get_bool("IsMetric")
       self.is_ldw_enabled = self.params.get_bool("IsLdwEnabled")
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
+      self.vision_bsm_enabled = self.params.get_bool("RivianPilotVisionBSMEnabled")
+      self.vision_bsm_loud_alert = self.params.get_bool("RivianPilotVisionBSMLoudAlert")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
 

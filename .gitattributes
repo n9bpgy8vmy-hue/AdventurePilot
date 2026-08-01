@@ -11,6 +11,7 @@
 *.wav filter=lfs diff=lfs merge=lfs -text
 # ap_logo.png: keep out of LFS so clones (e.g. Comma) get it without LFS
 selfdrive/assets/images/ap_logo.png -filter -diff -merge
+sunnypilot/rivianpilot/assets/vision_bsm_model.onnx -filter -diff -merge
 
 selfdrive/car/tests/test_models_segs.txt filter=lfs diff=lfs merge=lfs -text
 system/hardware/tici/updater filter=lfs diff=lfs merge=lfs -text
