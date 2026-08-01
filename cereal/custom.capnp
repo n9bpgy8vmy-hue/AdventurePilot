@@ -110,6 +110,7 @@ struct SelfdriveStateSP @0x81c2f05a394cf4af {
 
     promptSingleLow @31;
     promptSingleHigh @32;
+    promptDouble @33;
   }
 }
 
@@ -371,6 +372,7 @@ struct OnroadEventSP @0xda96579883444c35 {
     rivianMadsResumeWarning5Sec @28;
     rivianPilotLaneCorrectionAheadLeft @29;
     rivianPilotLaneCorrectionAheadRight @30;
+    rivianMadsLowSpeedBlinkerPause @31;
   }
 }
 

@@ -110,6 +110,39 @@ def test_post_turn_runtime_error_is_contained(mocker):
   mads.post_turn_resume.suppress_after_error.assert_called_once()
 
 
+def test_live_low_speed_blinker_pause_emits_one_handoff_alert(mocker):
+  mads = make_mads(mocker)
+  mads.selfdrive.sm.valid.__getitem__.return_value = True
+  mads.selfdrive.sm.recv_frame.__getitem__.return_value = 1
+  mads.post_turn_resume.update = mocker.MagicMock(side_effect=[
+    (PostTurnAction.pause, None),
+    (PostTurnAction.waiting, None),
+  ])
+  state = car_state(20)
+  state.leftBlinker = True
+
+  mads.update_post_turn_resume(state)
+  assert mads.events_sp.has(custom.OnroadEventSP.EventName.rivianMadsLowSpeedBlinkerPause)
+  assert mads.events_sp.has(custom.OnroadEventSP.EventName.silentLkasDisable)
+
+  mads.events_sp.clear()
+  mads.update_post_turn_resume(state)
+  assert not mads.events_sp.has(custom.OnroadEventSP.EventName.rivianMadsLowSpeedBlinkerPause)
+
+
+def test_observe_or_high_speed_path_does_not_emit_handoff_alert(mocker):
+  mads = make_mads(mocker)
+  mads.selfdrive.sm.valid.__getitem__.return_value = True
+  mads.selfdrive.sm.recv_frame.__getitem__.return_value = 1
+  mads.post_turn_resume.update = mocker.MagicMock(return_value=(PostTurnAction.none, None))
+  state = car_state(35)
+  state.leftBlinker = True
+
+  mads.update_post_turn_resume(state)
+  assert not mads.events_sp.has(custom.OnroadEventSP.EventName.rivianMadsLowSpeedBlinkerPause)
+  assert not mads.events_sp.has(custom.OnroadEventSP.EventName.silentLkasDisable)
+
+
 def test_metric_selection_uses_kph(mocker):
   mads = make_mads(mocker)
   mads.rivian_reverse_resume_pending = True

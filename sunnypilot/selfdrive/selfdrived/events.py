@@ -267,4 +267,11 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
   EventNameSP.rivianMadsResumeWarning5Sec: {
     ET.PERMANENT: rivian_mads_resume_warning_alert(5),
   },
+  EventNameSP.rivianMadsLowSpeedBlinkerPause: {
+    ET.PERMANENT: Alert(
+      "Automatic Lane Centering Paused",
+      "Low-speed blinker maneuver — steer manually",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.HIGH, VisualAlert.none, AudibleAlertSP.promptDouble, 2.),
+  },
 }

@@ -183,6 +183,23 @@ class ModularAssistiveDrivingSystem:
       if warning_second is not None:
         self.events_sp.add(RIVIAN_MADS_RESUME_WARNING_EVENTS[warning_second])
       if self.post_turn_action == PostTurnAction.pause:
+        # Feature 4 deliberately hands steering to the driver for a signaled
+        # low-speed maneuver. Make the one-time transition unmistakable; this
+        # event is never emitted for Observe mode or high-speed lane changes.
+        self.events_sp.add(EventNameSP.rivianMadsLowSpeedBlinkerPause)
+        if self.rivianpilot_feature_logging:
+          try:
+            cloudlog.event(
+              "rivian mads low speed blinker handoff",
+              action="alert_emitted",
+              speed_ms=round(float(CS.vEgo), 3),
+              max_turn_speed=self.post_turn_resume.max_turn_speed,
+              is_metric=self.is_metric,
+              left_blinker=bool(CS.leftBlinker),
+              right_blinker=bool(CS.rightBlinker),
+            )
+          except Exception:
+            pass
         self.transition_paused_state()
     except Exception as e:
       self.post_turn_action = PostTurnAction.none
