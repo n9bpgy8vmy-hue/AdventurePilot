@@ -375,6 +375,10 @@ struct OnroadEventSP @0xda96579883444c35 {
     rivianMadsLowSpeedBlinkerPause @31;
     rivianPilotVisionBSMBlocked @32;
     rivianPilotVisionBSMBlockedLoud @33;
+    rivianPilotVisionBSMDetectedLeft @34;
+    rivianPilotVisionBSMDetectedRight @35;
+    rivianPilotVisionBSMDetectedLeftLoud @36;
+    rivianPilotVisionBSMDetectedRightLoud @37;
   }
 }
 

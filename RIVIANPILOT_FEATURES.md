@@ -62,6 +62,7 @@ Phase 1 behavior:
 - A blinker-only request detected as occupied is cancelled; the blinker must be cycled off and on before another request.
 - An already-started lane change is not reversed by the detector.
 - Visual cancellation is always shown; sound is controlled independently by `RivianPilotVisionBSMLoudAlert`.
+- A matching blinker and fresh Vision-BSM detection shows a side-specific screen alert before a lane-change request. Logging records only detection start/clear transitions and duration.
 - Missing, stale, overloaded, or failed detector output cannot generate steering and falls back to existing lane-change behavior.
 
 Status: experimental, default off. Based on the hardened OpenCV integration following StarPilot PR #75. Vehicle-camera polygon calibration and parked validation are required before road evaluation.

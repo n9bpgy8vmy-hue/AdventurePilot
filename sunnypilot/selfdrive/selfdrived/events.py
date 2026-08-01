@@ -288,4 +288,32 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       AlertStatus.userPrompt, AlertSize.small,
       Priority.HIGH, VisualAlert.none, AudibleAlert.prompt, 1.),
   },
+  EventNameSP.rivianPilotVisionBSMDetectedLeft: {
+    ET.PERMANENT: Alert(
+      "Vision BSM: Vehicle on Left",
+      "Check mirrors before changing lanes",
+      AlertStatus.normal, AlertSize.small,
+      Priority.MID, VisualAlert.none, AudibleAlert.none, 1.),
+  },
+  EventNameSP.rivianPilotVisionBSMDetectedRight: {
+    ET.PERMANENT: Alert(
+      "Vision BSM: Vehicle on Right",
+      "Check mirrors before changing lanes",
+      AlertStatus.normal, AlertSize.small,
+      Priority.MID, VisualAlert.none, AudibleAlert.none, 1.),
+  },
+  EventNameSP.rivianPilotVisionBSMDetectedLeftLoud: {
+    ET.PERMANENT: Alert(
+      "Vision BSM: Vehicle on Left",
+      "Check mirrors before changing lanes",
+      AlertStatus.userPrompt, AlertSize.small,
+      Priority.MID, VisualAlert.none, AudibleAlert.prompt, 1.),
+  },
+  EventNameSP.rivianPilotVisionBSMDetectedRightLoud: {
+    ET.PERMANENT: Alert(
+      "Vision BSM: Vehicle on Right",
+      "Check mirrors before changing lanes",
+      AlertStatus.userPrompt, AlertSize.small,
+      Priority.MID, VisualAlert.none, AudibleAlert.prompt, 1.),
+  },
 }

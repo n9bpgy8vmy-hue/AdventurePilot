@@ -37,6 +37,18 @@ class VisionBSMState:
     return 0.0
 
 
+def get_matching_vision_bsm_side(left_blinker: bool, right_blinker: bool,
+                                 state: VisionBSMState) -> str:
+  """Return a detected vehicle side only for one unambiguous active blinker."""
+  if left_blinker == right_blinker:
+    return ""
+  if left_blinker and state.left:
+    return "left"
+  if right_blinker and state.right:
+    return "right"
+  return ""
+
+
 def _float_param(params, key: str, default: float = 0.0) -> float:
   try:
     return float(params.get(key) or default)

@@ -27,7 +27,7 @@ from openpilot.system.hardware import HARDWARE
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
 from openpilot.sunnypilot.rivianpilot.lane_position_controller import LanePositionController
 from openpilot.sunnypilot.rivianpilot.manual_turn_recorder import ManualTurnRecorder
-from openpilot.sunnypilot.rivianpilot.vision_bsm import get_vision_bsm_block
+from openpilot.sunnypilot.rivianpilot.vision_bsm import get_fresh_vision_bsm_state, get_matching_vision_bsm_side, get_vision_bsm_block
 from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
@@ -117,6 +117,9 @@ class SelfdriveD(CruiseHelper):
     self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
     self.vision_bsm_enabled = self.params.get_bool("RivianPilotVisionBSMEnabled")
     self.vision_bsm_loud_alert = self.params.get_bool("RivianPilotVisionBSMLoudAlert")
+    self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
+    self.vision_bsm_matching_side = ""
+    self.vision_bsm_matching_since = 0.0
 
     car_recognized = self.CP.brand != 'mock'
 
@@ -360,6 +363,28 @@ class SelfdriveD(CruiseHelper):
       self.events.add(EventName.laneChange)
 
     if self.CP.brand == "rivian" and self.vision_bsm_enabled:
+      vision_bsm = get_fresh_vision_bsm_state(self.params_memory)
+      matching_side = get_matching_vision_bsm_side(CS.leftBlinker, CS.rightBlinker, vision_bsm)
+      if matching_side != self.vision_bsm_matching_side:
+        now = time.monotonic()
+        if self.rivianpilot_feature_logging and self.vision_bsm_matching_side:
+          try:
+            cloudlog.event("rivianpilot vision bsm", action="matching_detection_cleared",
+                           side=self.vision_bsm_matching_side,
+                           duration=max(0.0, now - self.vision_bsm_matching_since))
+          except Exception:
+            pass
+        self.vision_bsm_matching_side = matching_side
+        self.vision_bsm_matching_since = now if matching_side else 0.0
+        if self.rivianpilot_feature_logging and matching_side:
+          try:
+            cloudlog.event("rivianpilot vision bsm", action="matching_detection_started",
+                           side=matching_side, confidence=vision_bsm.confidence(
+                             LaneChangeDirection.left if matching_side == "left" else LaneChangeDirection.right),
+                           detector_age=vision_bsm.age)
+          except Exception:
+            pass
+
       blocked_side, _ = get_vision_bsm_block(self.params_memory)
       matching_blinker = ((blocked_side == "left" and CS.leftBlinker) or
                           (blocked_side == "right" and CS.rightBlinker))
@@ -368,6 +393,28 @@ class SelfdriveD(CruiseHelper):
                  if self.vision_bsm_loud_alert
                  else EventNameSP.rivianPilotVisionBSMBlocked)
         self.events_sp.add(event)
+      elif matching_side:
+        loud_detection = self.vision_bsm_loud_alert and time.monotonic() - self.vision_bsm_matching_since < 1.0
+        if matching_side == "left":
+          event = (EventNameSP.rivianPilotVisionBSMDetectedLeftLoud
+                   if loud_detection
+                   else EventNameSP.rivianPilotVisionBSMDetectedLeft)
+        else:
+          event = (EventNameSP.rivianPilotVisionBSMDetectedRightLoud
+                   if loud_detection
+                   else EventNameSP.rivianPilotVisionBSMDetectedRight)
+        self.events_sp.add(event)
+    elif self.vision_bsm_matching_side:
+      if self.rivianpilot_feature_logging:
+        try:
+          cloudlog.event("rivianpilot vision bsm", action="matching_detection_cleared",
+                         side=self.vision_bsm_matching_side,
+                         duration=max(0.0, time.monotonic() - self.vision_bsm_matching_since),
+                         reason="feature_disabled")
+        except Exception:
+          pass
+      self.vision_bsm_matching_side = ""
+      self.vision_bsm_matching_since = 0.0
 
     # Handle lane turn
     lane_turn_direction = self.sm['modelDataV2SP'].laneTurnDirection
@@ -677,6 +724,7 @@ class SelfdriveD(CruiseHelper):
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
       self.vision_bsm_enabled = self.params.get_bool("RivianPilotVisionBSMEnabled")
       self.vision_bsm_loud_alert = self.params.get_bool("RivianPilotVisionBSMLoudAlert")
+      self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
 

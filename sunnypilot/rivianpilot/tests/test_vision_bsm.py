@@ -5,6 +5,7 @@ from openpilot.sunnypilot.rivianpilot.vision_bsm import (
   VBSM_STATE_TIMEOUT_SECONDS,
   VisionBSMLaneChangeGuard,
   get_fresh_vision_bsm_state,
+  get_matching_vision_bsm_side,
   get_vision_bsm_block,
 )
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeMode
@@ -50,6 +51,15 @@ def test_fresh_and_stale_detector_state():
   assert fresh.fresh and fresh.left and not fresh.right
   assert fresh.left_confidence == 0.91
   assert not stale.fresh and not stale.left and not stale.right
+
+
+def test_matching_detection_requires_exactly_one_blinker():
+  state = get_fresh_vision_bsm_state(detector_state(left=True, right=True), now=100.1)
+
+  assert get_matching_vision_bsm_side(True, False, state) == "left"
+  assert get_matching_vision_bsm_side(False, True, state) == "right"
+  assert get_matching_vision_bsm_side(False, False, state) == ""
+  assert get_matching_vision_bsm_side(True, True, state) == ""
 
 
 def test_nudge_during_detection_is_consumed_until_release():
