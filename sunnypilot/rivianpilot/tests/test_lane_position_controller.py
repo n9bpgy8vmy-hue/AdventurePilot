@@ -37,16 +37,22 @@ def car_state():
   )
 
 
-def model(probability=0.9, lane_half_width=1.8, path_y=0.0):
-  x = [0.0, 10.0, 20.0, 30.0]
+def model(probability=0.9, lane_half_width=1.8, path_y=0.0, far_lane_half_width=None,
+          predicted_lat_accel=0.0, predicted_speed=30.0):
+  x = [0.0, 10.0, 20.0, 60.0]
+  half_widths = [lane_half_width] * 3 + [far_lane_half_width if far_lane_half_width is not None else lane_half_width]
+  times = [0.0, 0.5, 1.0, 2.0]
+  yaw_rate = predicted_lat_accel / predicted_speed if predicted_speed > 0.0 else 0.0
   return SimpleNamespace(
     laneLineProbs=[0.0, probability, probability, 0.0],
     laneLines=[
       SimpleNamespace(x=x, y=[0.0] * 4),
-      SimpleNamespace(x=x, y=[-lane_half_width] * 4),
-      SimpleNamespace(x=x, y=[lane_half_width] * 4),
+      SimpleNamespace(x=x, y=[-width for width in half_widths]),
+      SimpleNamespace(x=x, y=half_widths),
     ],
-    position=SimpleNamespace(x=x, y=[path_y] * 4),
+    position=SimpleNamespace(x=x, y=[path_y] * 4, t=times),
+    orientationRate=SimpleNamespace(z=[yaw_rate] * 4),
+    velocity=SimpleNamespace(x=[predicted_speed] * 4),
   )
 
 
@@ -172,7 +178,7 @@ def test_wide_lane_never_exceeds_configured_curve_offset():
   assert feature.last_output == -3 * 0.0254
 
 
-def test_curve_reference_is_captured_before_offset_and_held_for_episode():
+def test_curve_clearance_filter_compensates_for_its_own_offset():
   p = params()
   feature = LanePositionController(p)
   cs = car_state()
@@ -184,11 +190,88 @@ def test_curve_reference_is_captured_before_offset_and_held_for_episode():
   assert reference is not None
   assert feature.last_output == -3 * 0.0254
 
-  # Simulate the model path reacting to the camera transform. The pre-offset
-  # reference remains stable instead of canceling the feature's own output.
-  feature.update(cs, True, model(lane_half_width=1.8, path_y=0.5), controls, now=2.6)
+  # Simulate the model path reacting by the amount of the camera transform.
+  # Adding the output back before filtering prevents self-cancellation.
+  feature.update(cs, True, model(lane_half_width=1.8, path_y=abs(feature.last_output)), controls, now=2.6)
   assert feature.curve_reference_clearance == reference
   assert feature.last_output == -3 * 0.0254
+
+
+def test_bad_initial_clearance_recovers_during_same_curve():
+  p = params()
+  feature = LanePositionController(p)
+  cs = car_state()
+  controls = SimpleNamespace(desiredCurvature=0.002)
+  # A bad initial path estimate reports no room toward driver-right.
+  blocked = model(lane_half_width=1.5, path_y=0.5)
+  for now in (1.0, 1.2, 1.4, 1.6, 1.8):
+    feature.update(cs, True, blocked, controls, now=now)
+  assert feature.last_output == 0.0
+
+  # Unlike the old frozen reference, a recovered corridor becomes usable
+  # without waiting for the curve to end.
+  recovered = model(lane_half_width=1.8, path_y=0.0)
+  for now in (2.0, 2.2, 2.4, 2.6, 2.8, 3.0):
+    feature.update(cs, True, recovered, controls, now=now)
+  assert feature.last_output < 0.0
+
+
+def test_stable_predicted_curve_activates_before_current_curvature():
+  p = params()
+  feature = LanePositionController(p)
+  cs = car_state()
+  straight_controls = SimpleNamespace(desiredCurvature=0.0)
+  approaching_curve = model(predicted_lat_accel=1.5)
+  for now in (1.0, 1.2, 1.4, 1.6, 1.8, 2.0):
+    feature.update(cs, True, approaching_curve, straight_controls, now=now)
+  assert feature.curve_active
+  assert feature.last_output < 0.0
+
+
+def test_unstable_predicted_direction_never_activates():
+  p = params()
+  feature = LanePositionController(p)
+  cs = car_state()
+  controls = SimpleNamespace(desiredCurvature=0.0)
+  for i, now in enumerate((1.0, 1.2, 1.4, 1.6, 1.8, 2.0)):
+    prediction = 1.5 if i % 2 == 0 else -1.5
+    feature.update(cs, True, model(predicted_lat_accel=prediction), controls, now=now)
+  assert not feature.curve_active
+  assert feature.last_output == 0.0
+
+
+def test_fork_holds_custom_offset_then_recovers_on_stable_branch():
+  p = params()
+  feature = LanePositionController(p)
+  cs = car_state()
+  controls = establish_curve(feature, cs)
+  assert feature.last_output < 0.0
+
+  fork = model(lane_half_width=1.5, far_lane_half_width=2.0)
+  for now in (2.6, 2.8, 3.0):
+    feature.update(cs, True, fork, controls, now=now)
+  assert feature.fork_hold
+  assert feature.last_output == 0.0
+
+  stable_branch = model(lane_half_width=1.8)
+  for now in (3.2, 3.4, 3.6, 3.8, 4.0, 4.2, 4.4, 4.6, 4.8):
+    feature.update(cs, True, stable_branch, controls, now=now)
+  assert not feature.fork_hold
+  assert feature.last_output < 0.0
+
+
+def test_relaxed_geometry_never_overrides_fork_hold():
+  p = params()
+  original_get_bool = p.get_bool.side_effect
+  p.get_bool.side_effect = lambda key: True if key == "RivianPilotLanePositionRelaxed" else original_get_bool(key)
+  feature = LanePositionController(p)
+  cs = car_state()
+  controls = establish_curve(feature, cs)
+  fork = model(lane_half_width=1.5, far_lane_half_width=2.0)
+  for now in (2.6, 2.8, 3.0, 3.2):
+    feature.update(cs, True, fork, controls, now=now)
+  assert feature.fork_hold
+  assert feature.last_output == 0.0
 
 
 def test_persistent_geometry_loss_ramps_automatic_offset_out():

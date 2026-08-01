@@ -26,10 +26,18 @@ UPDATE_PERIOD_SECONDS = 0.1
 SAMPLE_LOG_PERIOD_SECONDS = 0.5
 CURVE_RELEASE_RATIO = 0.8
 CURVE_REFERENCE_SAMPLES = 3
+CURVE_CLEARANCE_FILTER_SAMPLES = 5
 CURVE_GEOMETRY_MISS_LIMIT = 3
 CURVE_RAMP_IN_MPS = 3.0 * INCH_TO_M
 CURVE_RAMP_OUT_MPS = 8.0 * INCH_TO_M
 RELAXED_MAX_OFFSET_M = 2.0 * INCH_TO_M
+PREDICTIVE_LOOKAHEAD_START_S = 0.5
+PREDICTIVE_LOOKAHEAD_END_S = 2.0
+PREDICTIVE_DIRECTION_STABLE_FRAMES = 3
+FORK_WIDTH_DELTA_M = 0.65
+FORK_RECOVERY_STABLE_FRAMES = 5
+MIN_CORRIDOR_SAMPLE_M = 10.0
+MAX_CORRIDOR_HORIZON_M = 70.0
 
 
 class LanePositionController:
@@ -66,6 +74,10 @@ class LanePositionController:
     self.curve_reference_samples = []
     self.curve_reference_clearance = None
     self.curve_geometry_misses = 0
+    self.fork_hold = False
+    self.fork_recovery_frames = 0
+    self.predicted_curve_direction = 0
+    self.predicted_curve_stable_frames = 0
     self.automatic_output = 0.0
     self.faulted = False
     self.error_logged = False
@@ -124,7 +136,7 @@ class LanePositionController:
       raise
 
   @staticmethod
-  def _sample_geometry(model) -> tuple[float, float, float, float, float, float]:
+  def _sample_geometry(model, corridor_horizon_m: float = SAMPLE_DISTANCE_M) -> tuple[float, float, float, float, float, float, float]:
     probs = list(model.laneLineProbs)
     lines = list(model.laneLines)
     path_x = list(model.position.x)
@@ -136,12 +148,13 @@ class LanePositionController:
     usable = min(len(left_x), len(left_y), len(right_y))
     if usable == 0 or not path_x or not path_y:
       raise ValueError("lane geometry")
-    lane_index = min(range(usable), key=lambda i: abs(float(left_x[i]) - SAMPLE_DISTANCE_M))
-    path_index = min(range(min(len(path_x), len(path_y))),
-                     key=lambda i: abs(float(path_x[i]) - float(left_x[lane_index])))
-    left = float(left_y[lane_index])
-    right = float(right_y[lane_index])
-    path = float(path_y[path_index])
+    def sample_at(distance_m: float):
+      lane_index = min(range(usable), key=lambda i: abs(float(left_x[i]) - distance_m))
+      path_index = min(range(min(len(path_x), len(path_y))),
+                       key=lambda i: abs(float(path_x[i]) - float(left_x[lane_index])))
+      return float(left_y[lane_index]), float(right_y[lane_index]), float(path_y[path_index])
+
+    left, right, path = sample_at(SAMPLE_DISTANCE_M)
     if not all(math.isfinite(v) for v in (left, right, path)):
       raise ValueError("non-finite geometry")
     # Live model coordinates increase toward driver-right: laneLines[1] is the
@@ -151,18 +164,54 @@ class LanePositionController:
     width = right - left
     if not MIN_LANE_WIDTH_M <= width <= MAX_LANE_WIDTH_M:
       raise ValueError("implausible lane width")
+    corridor_widths = []
+    for distance_m in (MIN_CORRIDOR_SAMPLE_M, SAMPLE_DISTANCE_M,
+                       max(SAMPLE_DISTANCE_M, min(MAX_CORRIDOR_HORIZON_M, corridor_horizon_m))):
+      corridor_left, corridor_right, corridor_path = sample_at(distance_m)
+      if not all(math.isfinite(v) for v in (corridor_left, corridor_right, corridor_path)):
+        raise ValueError("non-finite geometry")
+      corridor_width = corridor_right - corridor_left
+      if not MIN_LANE_WIDTH_M <= corridor_width <= MAX_LANE_WIDTH_M:
+        raise ValueError("fork or merge")
+      if not corridor_left < corridor_path < corridor_right:
+        raise ValueError("fork or merge")
+      corridor_widths.append(corridor_width)
+    width_delta = max(corridor_widths) - min(corridor_widths)
+    if width_delta > FORK_WIDTH_DELTA_M:
+      raise ValueError("fork or merge")
     driver_left_clearance = path - left - R1T_HALF_LANE_ENVELOPE_M - BOUNDARY_MARGIN_M
     driver_right_clearance = right - path - R1T_HALF_LANE_ENVELOPE_M - BOUNDARY_MARGIN_M
     return (width, path, max(0.0, driver_left_clearance),
-            max(0.0, driver_right_clearance), float(probs[1]), float(probs[2]))
+            max(0.0, driver_right_clearance), float(probs[1]), float(probs[2]), width_delta)
 
-  def _sample_geometry_if_authoritative(self, model):
+  def _sample_geometry_if_authoritative(self, model, corridor_horizon_m: float):
     try:
-      return self._sample_geometry(model), "authoritative"
+      return self._sample_geometry(model, corridor_horizon_m), "authoritative"
     except ValueError as e:
       # Lane geometry is an optional guard for automatic movement. Weak or
       # missing lane lines never cancel an authoritative manual nudge.
       return None, str(e)
+
+  @staticmethod
+  def _predicted_curve(model) -> tuple[float, float]:
+    """Return strongest predicted lateral acceleration and its time in the near horizon."""
+    try:
+      times = list(model.position.t)
+      yaw_rates = list(model.orientationRate.z)
+      speeds = list(model.velocity.x)
+      usable = min(len(times), len(yaw_rates), len(speeds))
+      candidates = []
+      for i in range(usable):
+        t = float(times[i])
+        yaw_rate = float(yaw_rates[i])
+        speed = max(0.0, float(speeds[i]))
+        if not all(math.isfinite(v) for v in (t, yaw_rate, speed)):
+          continue
+        if PREDICTIVE_LOOKAHEAD_START_S <= t <= PREDICTIVE_LOOKAHEAD_END_S:
+          candidates.append((yaw_rate * speed, t))
+      return max(candidates, key=lambda value: abs(value[0])) if candidates else (0.0, 0.0)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+      return 0.0, 0.0
 
   @staticmethod
   def _diagnostics(CS, model, controls, car_control=None, car_output=None) -> dict:
@@ -236,6 +285,10 @@ class LanePositionController:
     self.curve_reference_samples = []
     self.curve_reference_clearance = None
     self.curve_geometry_misses = 0
+    self.fork_hold = False
+    self.fork_recovery_frames = 0
+    self.predicted_curve_direction = 0
+    self.predicted_curve_stable_frames = 0
     self.automatic_output = 0.0
     self._publish(0.0)
     if had_offset:
@@ -269,6 +322,8 @@ class LanePositionController:
       self.curve_reference_samples = []
       self.curve_reference_clearance = None
       self.curve_geometry_misses = 0
+      self.fork_hold = False
+      self.fork_recovery_frames = 0
       self.automatic_output = 0.0
       self.nudge_direction = 0
       self.nudge_until = 0.0
@@ -283,7 +338,29 @@ class LanePositionController:
 
     desired_curvature = self._finite(controls.desiredCurvature)
     lat_accel = desired_curvature * max(self._finite(CS.vEgo), 0.0) ** 2
-    curve_strength = min(100.0, abs(lat_accel) / MAX_CURVE_LAT_ACCEL * 100.0)
+    current_curve_strength = min(100.0, abs(lat_accel) / MAX_CURVE_LAT_ACCEL * 100.0)
+    predicted_lat_accel, predicted_curve_time = self._predicted_curve(model)
+    predicted_curve_strength = min(100.0, abs(predicted_lat_accel) / MAX_CURVE_LAT_ACCEL * 100.0)
+    predicted_direction = 1 if predicted_lat_accel > 0.0 else -1 if predicted_lat_accel < 0.0 else 0
+    if predicted_direction and predicted_curve_strength >= self.curve_threshold_pct:
+      if predicted_direction == self.predicted_curve_direction:
+        self.predicted_curve_stable_frames += 1
+      else:
+        self.predicted_curve_direction = predicted_direction
+        self.predicted_curve_stable_frames = 1
+    else:
+      self.predicted_curve_direction = 0
+      self.predicted_curve_stable_frames = 0
+    predictive_stable = self.predicted_curve_stable_frames >= PREDICTIVE_DIRECTION_STABLE_FRAMES
+    current_direction = 1 if lat_accel > 0.0 else -1 if lat_accel < 0.0 else 0
+    current_curve_established = current_curve_strength >= self.curve_threshold_pct * CURVE_RELEASE_RATIO
+    # Never let a future opposite bend pull against a curve the truck is
+    # currently traversing. Prediction may strengthen the same bend or pre-arm
+    # the next bend only after current curvature has released.
+    prediction_direction_compatible = predicted_direction == current_direction or not current_curve_established
+    use_prediction = predictive_stable and prediction_direction_compatible and predicted_curve_strength > current_curve_strength
+    curve_lat_accel = predicted_lat_accel if use_prediction else lat_accel
+    curve_strength = predicted_curve_strength if use_prediction else current_curve_strength
 
     requested = 0.0
     source = "none"
@@ -309,6 +386,8 @@ class LanePositionController:
       self.curve_reference_samples = []
       self.curve_reference_clearance = None
       self.curve_geometry_misses = 0
+      self.fork_hold = False
+      self.fork_recovery_frames = 0
       self.automatic_output = 0.0
     else:
       self.nudge_direction = 0
@@ -317,7 +396,7 @@ class LanePositionController:
       next_curve_active = self.curve_enabled and (
         curve_strength >= (release_threshold if self.curve_active else self.curve_threshold_pct)
       )
-      next_curve_direction = 1 if lat_accel > 0.0 else -1 if lat_accel < 0.0 else 0
+      next_curve_direction = 1 if curve_lat_accel > 0.0 else -1 if curve_lat_accel < 0.0 else 0
       new_episode = next_curve_active and (
         not was_curve_active or next_curve_direction != self.curve_direction
       )
@@ -329,43 +408,68 @@ class LanePositionController:
         self.curve_reference_samples = []
         self.curve_reference_clearance = None
         self.curve_geometry_misses = 0
+        self.fork_hold = False
+        self.fork_recovery_frames = 0
         self.automatic_output = 0.0
         self._log("curve_started", episode_id=self.curve_episode_id,
                   turn_direction="left" if next_curve_direction > 0 else "right",
                   configured_offset_inches=self.curve_offset_inches,
                   configured_threshold_pct=self.curve_threshold_pct,
                   base_camera_offset_m=round(base_camera_offset, 4))
-      if self.curve_active and lat_accel != 0.0:
+      if self.curve_active and curve_lat_accel != 0.0:
         # Positive CameraOffset moves driver-left. Move opposite the curve:
         # positive/left curvature requests negative/driver-right, and vice versa.
         base_offset = self.curve_offset_inches * INCH_TO_M
-        requested = -math.copysign(base_offset, lat_accel)
+        requested = -math.copysign(base_offset, curve_lat_accel)
         source = "automatic_curve_referenced"
-        geometry, geometry_status = self._sample_geometry_if_authoritative(model)
+        corridor_horizon_m = max(SAMPLE_DISTANCE_M, min(MAX_CORRIDOR_HORIZON_M,
+                                                        max(self._finite(CS.vEgo), 0.0) * PREDICTIVE_LOOKAHEAD_END_S))
+        geometry, geometry_status = self._sample_geometry_if_authoritative(model, corridor_horizon_m)
         if geometry is not None:
-          width, path, driver_left_clearance, driver_right_clearance, left_prob, right_prob = geometry
+          width, path, driver_left_clearance, driver_right_clearance, left_prob, right_prob, width_delta = geometry
           movement_clearance = driver_left_clearance if requested > 0.0 else driver_right_clearance
           self.curve_geometry_misses = 0
-          # Capture clearance before applying an offset. Holding this reference
-          # for the curve prevents the offset from canceling itself on the next
-          # model cycle.
-          if self.curve_reference_clearance is None:
-            self.curve_reference_samples.append(movement_clearance)
+          if self.fork_hold:
+            self.fork_recovery_frames += 1
+            if self.fork_recovery_frames >= FORK_RECOVERY_STABLE_FRAMES:
+              self.fork_hold = False
+              self.fork_recovery_frames = 0
+              self.curve_reference_samples = []
+              self.curve_reference_clearance = None
+              self._log("fork_recovered", episode_id=self.curve_episode_id)
+          if not self.fork_hold:
+            # The model path reacts to the published camera transform. Add the
+            # current output back before filtering so the feature cannot cancel
+            # itself, while allowing a bad initial sample to recover.
+            total_clearance_budget = max(0.0, width - R1T_LANE_ENVELOPE_M - 2.0 * BOUNDARY_MARGIN_M)
+            compensated_clearance = min(total_clearance_budget,
+                                        max(0.0, movement_clearance + abs(self.automatic_output)))
+            self.curve_reference_samples.append(compensated_clearance)
+            self.curve_reference_samples = self.curve_reference_samples[-CURVE_CLEARANCE_FILTER_SAMPLES:]
             if len(self.curve_reference_samples) >= CURVE_REFERENCE_SAMPLES:
               ordered = sorted(self.curve_reference_samples)
               self.curve_reference_clearance = ordered[len(ordered) // 2]
-              self._log("curve_reference_ready", episode_id=self.curve_episode_id,
-                        reference_clearance_m=round(self.curve_reference_clearance, 4),
-                        lane_width_m=round(width, 3))
+              if len(self.curve_reference_samples) == CURVE_REFERENCE_SAMPLES:
+                self._log("curve_reference_ready", episode_id=self.curve_episode_id,
+                          reference_clearance_m=round(self.curve_reference_clearance, 4),
+                          lane_width_m=round(width, 3))
           reference_state = "ready" if self.curve_reference_clearance is not None else "collecting"
         else:
           self.curve_geometry_misses += 1
           reference_state = "missing"
+          if geometry_status == "fork or merge":
+            if not self.fork_hold:
+              self._log("fork_hold", episode_id=self.curve_episode_id)
+            self.fork_hold = True
+            self.fork_recovery_frames = 0
+            self.curve_reference_samples = []
+            self.curve_reference_clearance = None
+            source = "automatic_curve_fork_hold"
 
-        if self.curve_reference_clearance is not None and self.curve_geometry_misses < CURVE_GEOMETRY_MISS_LIMIT:
+        if not self.fork_hold and self.curve_reference_clearance is not None and self.curve_geometry_misses < CURVE_GEOMETRY_MISS_LIMIT:
           target = math.copysign(min(abs(requested), self.curve_reference_clearance), requested)
           safety_capped = abs(target) + 1e-6 < abs(requested)
-        elif self.relaxed_geometry and self.curve_geometry_misses >= CURVE_GEOMETRY_MISS_LIMIT:
+        elif not self.fork_hold and self.relaxed_geometry and self.curve_geometry_misses >= CURVE_GEOMETRY_MISS_LIMIT:
           # Explicit opt-in for poorly marked roads. This never exceeds two
           # inches and remains subordinate to driver steering and core control.
           target = math.copysign(min(abs(requested), RELAXED_MAX_OFFSET_M), requested)
@@ -397,6 +501,8 @@ class LanePositionController:
           self.curve_reference_samples = []
           self.curve_reference_clearance = None
           self.curve_geometry_misses = 0
+          self.fork_hold = False
+          self.fork_recovery_frames = 0
         applied = self.automatic_output
 
     self._publish(applied)
@@ -404,7 +510,7 @@ class LanePositionController:
     if now - self.last_sample_log >= SAMPLE_LOG_PERIOD_SECONDS:
       lane_fields = {}
       if geometry is not None:
-        width, path, driver_left_clearance, driver_right_clearance, left_prob, right_prob = geometry
+        width, path, driver_left_clearance, driver_right_clearance, left_prob, right_prob, width_delta = geometry
         lane_fields = {
           "lane_width_m": round(width, 3),
           "path_y_m": round(path, 3),
@@ -412,11 +518,16 @@ class LanePositionController:
           "driver_right_clearance_m": round(driver_right_clearance, 3),
           "left_lane_probability": round(left_prob, 3),
           "right_lane_probability": round(right_prob, 3),
+          "corridor_width_delta_m": round(width_delta, 3),
         }
       self._log("sample", source=source, speed_ms=round(float(CS.vEgo), 3),
-                turn_direction="left" if lat_accel > 0.0 else "right" if lat_accel < 0.0 else "straight",
+                turn_direction="left" if curve_lat_accel > 0.0 else "right" if curve_lat_accel < 0.0 else "straight",
                 movement_direction="left" if applied > 0.0 else "right" if applied < 0.0 else "none",
                 curve_strength_pct=round(curve_strength, 1),
+                current_curve_strength_pct=round(current_curve_strength, 1),
+                predicted_curve_strength_pct=round(predicted_curve_strength, 1),
+                predicted_curve_time_s=round(predicted_curve_time, 2) if predicted_curve_time else None,
+                predictive_curve_used=use_prediction,
                 episode_id=self.curve_episode_id if source.startswith("automatic_curve") else None,
                 episode_age_s=round(now - self.curve_episode_started, 2) if self.curve_episode_started else None,
                 configured_offset_inches=self.curve_offset_inches,
@@ -428,6 +539,7 @@ class LanePositionController:
                 reference_clearance_m=round(self.curve_reference_clearance, 4)
                 if self.curve_reference_clearance is not None else None,
                 reference_state=reference_state,
+                fork_hold=self.fork_hold, fork_recovery_frames=self.fork_recovery_frames,
                 geometry_miss_count=self.curve_geometry_misses,
                 safety_capped_offset_m=round(applied, 4), safety_capped=safety_capped,
                 published_offset_m=round(self.last_output or 0.0, 4),
