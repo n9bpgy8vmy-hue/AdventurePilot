@@ -11,7 +11,7 @@ from openpilot.sunnypilot.selfdrive.selfdrived.events_base import EventsBase, Pr
   NoEntryAlert, ImmediateDisableAlert, EngagementAlert, NormalPermanentAlert, AlertCallbackType, wrong_car_mode_alert
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED, CONFIRM_SPEED_THRESHOLD
 from openpilot.system.hardware import HARDWARE
-from openpilot.sunnypilot.rivianpilot.vision_bsm import memory_params
+from openpilot.sunnypilot.rivianpilot.lane_position_controller import memory_params
 
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
@@ -300,47 +300,5 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
   EventNameSP.rivianPilotLaneCorrectionAheadRight: {
     ET.PERMANENT: rivian_lane_correction_right_alert,
-  },
-  EventNameSP.rivianPilotVisionBSMBlocked: {
-    ET.PERMANENT: Alert(
-      "Car Detected in Blind Spot",
-      "Lane Change Cancelled",
-      AlertStatus.userPrompt, AlertSize.small,
-      Priority.HIGH, VisualAlert.none, AudibleAlert.none, 1.),
-  },
-  EventNameSP.rivianPilotVisionBSMBlockedLoud: {
-    ET.PERMANENT: Alert(
-      "Car Detected in Blind Spot",
-      "Lane Change Cancelled",
-      AlertStatus.userPrompt, AlertSize.small,
-      Priority.HIGH, VisualAlert.none, AudibleAlert.prompt, 1.),
-  },
-  EventNameSP.rivianPilotVisionBSMDetectedLeft: {
-    ET.PERMANENT: Alert(
-      "Vision BSM: Vehicle on Left",
-      "Check mirrors before changing lanes",
-      AlertStatus.normal, AlertSize.small,
-      Priority.MID, VisualAlert.none, AudibleAlert.none, 1.),
-  },
-  EventNameSP.rivianPilotVisionBSMDetectedRight: {
-    ET.PERMANENT: Alert(
-      "Vision BSM: Vehicle on Right",
-      "Check mirrors before changing lanes",
-      AlertStatus.normal, AlertSize.small,
-      Priority.MID, VisualAlert.none, AudibleAlert.none, 1.),
-  },
-  EventNameSP.rivianPilotVisionBSMDetectedLeftLoud: {
-    ET.PERMANENT: Alert(
-      "Vision BSM: Vehicle on Left",
-      "Check mirrors before changing lanes",
-      AlertStatus.userPrompt, AlertSize.small,
-      Priority.MID, VisualAlert.none, AudibleAlert.prompt, 1.),
-  },
-  EventNameSP.rivianPilotVisionBSMDetectedRightLoud: {
-    ET.PERMANENT: Alert(
-      "Vision BSM: Vehicle on Right",
-      "Check mirrors before changing lanes",
-      AlertStatus.userPrompt, AlertSize.small,
-      Priority.MID, VisualAlert.none, AudibleAlert.prompt, 1.),
   },
 }

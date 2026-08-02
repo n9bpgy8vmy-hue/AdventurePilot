@@ -1,11 +1,15 @@
 import math
+import platform
 import time
 
 from opendbc.car import structs
 
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.sunnypilot.rivianpilot.vision_bsm import memory_params
+
+
+def memory_params() -> Params:
+  return Params("/dev/shm/params") if platform.system() != "Darwin" else Params()
 
 
 INCH_TO_M = 0.0254

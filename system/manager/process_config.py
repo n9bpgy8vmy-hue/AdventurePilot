@@ -64,9 +64,6 @@ def only_onroad(started: bool, params: Params, CP: car.CarParams) -> bool:
 def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
   return not started
 
-def run_rivian_vision_bsm(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return started and CP.brand == "rivian" and params.get_bool("RivianPilotVisionBSMEnabled")
-
 def use_github_runner(started, params, CP: car.CarParams) -> bool:
   return not PC and params.get_bool("EnableGithubRunner") and (
     not params.get_bool("NetworkMetered") and not params.get_bool("GithubRunnerSufficientVoltage"))
@@ -157,7 +154,6 @@ procs = [
   PythonProcess("uploader", "system.loggerd.uploader", uploader_ready),
   PythonProcess("statsd", "system.statsd", always_run),
   PythonProcess("feedbackd", "selfdrive.ui.feedback.feedbackd", only_onroad),
-  PythonProcess("rivian_vision_bsmd", "sunnypilot.rivianpilot.vision_bsmd", run_rivian_vision_bsm),
 
   # debug procs
   NativeProcess("bridge", "cereal/messaging", ["./bridge"], notcar),

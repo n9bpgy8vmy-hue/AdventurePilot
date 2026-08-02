@@ -4,14 +4,12 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+import pyray as rl
 import time
 from dataclasses import dataclass
 
-import pyray as rl
-
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.mici.onroad.alert_renderer import IconSide, TURN_SIGNAL_BLINK_PERIOD
-from openpilot.sunnypilot.rivianpilot.vision_bsm import get_fresh_vision_bsm_state, memory_params
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -75,7 +73,6 @@ class TurnSignalWidget(Widget):
 
 class TurnSignalController:
   def __init__(self):
-    self._params_memory = memory_params()
     self._config = TurnSignalConfig()
     self._left_signal = TurnSignalWidget(direction=IconSide.left)
     self._right_signal = TurnSignalWidget(direction=IconSide.right)
@@ -91,10 +88,9 @@ class TurnSignalController:
 
   def update(self):
     CS = ui_state.sm['carState']
-    vision_bsm = get_fresh_vision_bsm_state(self._params_memory)
 
-    self._update_signal(self._left_signal, CS.leftBlindspot or vision_bsm.left, CS.leftBlinker)
-    self._update_signal(self._right_signal, CS.rightBlindspot or vision_bsm.right, CS.rightBlinker)
+    self._update_signal(self._left_signal, CS.leftBlindspot, CS.leftBlinker)
+    self._update_signal(self._right_signal, CS.rightBlindspot, CS.rightBlinker)
 
   def render(self, rect: rl.Rectangle):
     if not ui_state.turn_signals and not ui_state.blindspot:

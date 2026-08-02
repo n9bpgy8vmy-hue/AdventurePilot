@@ -3,7 +3,6 @@ from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeController, AutoLaneChangeMode
 from openpilot.sunnypilot.selfdrive.controls.lib.lane_turn_desire import LaneTurnController
-from openpilot.sunnypilot.rivianpilot.vision_bsm import VisionBSMLaneChangeGuard
 
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
@@ -52,7 +51,6 @@ class DesireHelper:
     self.alc = AutoLaneChangeController(self)
     self.lane_turn_controller = LaneTurnController(self)
     self.lane_turn_direction = TurnDirection.none
-    self.vision_bsm_guard = VisionBSMLaneChangeGuard()
 
   @staticmethod
   def get_lane_change_direction(CS):
@@ -60,15 +58,10 @@ class DesireHelper:
 
   def update(self, carstate, lateral_active, lane_change_prob):
     self.alc.update_params()
-    self.vision_bsm_guard.update_params()
     self.lane_turn_controller.update_params()
     v_ego = carstate.vEgo
     one_blinker = carstate.leftBlinker != carstate.rightBlinker
     below_lane_change_speed = v_ego < LANE_CHANGE_SPEED_MIN
-    vision_bsm_state = self.vision_bsm_guard.state()
-
-    if not one_blinker:
-      self.vision_bsm_guard.reset_for_blinker_off()
 
     # Lane turn controller update
     self.lane_turn_controller.update_lane_turn(blindspot_left=carstate.leftBlindspot, blindspot_right=carstate.rightBlindspot,
@@ -95,28 +88,15 @@ class DesireHelper:
                          ((carstate.steeringTorque > 0 and self.lane_change_direction == LaneChangeDirection.left) or
                           (carstate.steeringTorque < 0 and self.lane_change_direction == LaneChangeDirection.right))
 
-        torque_applied = self.vision_bsm_guard.filter_nudge(
-          torque_applied, self.lane_change_direction, vision_bsm_state,
-        )
-
         blindspot_detected = ((carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or
                               (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
-        vision_blindspot_detected = vision_bsm_state.detected(self.lane_change_direction)
-        combined_blindspot_detected = blindspot_detected or vision_blindspot_detected
 
-        self.alc.update_lane_change(combined_blindspot_detected, carstate.brakePressed)
+        self.alc.update_lane_change(blindspot_detected, carstate.brakePressed)
 
         if not one_blinker or below_lane_change_speed:
           self.lane_change_state = LaneChangeState.off
           self.lane_change_direction = LaneChangeDirection.none
-        elif self.vision_bsm_guard.should_cancel_blinker_request(
-          self.alc.lane_change_set_timer, self.lane_change_direction, vision_bsm_state,
-        ):
-          # Keep prev_one_blinker latched below so a blinker-only request requires
-          # a deliberate off/on cycle after V-BSM cancels it.
-          self.lane_change_state = LaneChangeState.off
-          self.lane_change_direction = LaneChangeDirection.none
-        elif (torque_applied or self.alc.auto_lane_change_allowed) and not combined_blindspot_detected:
+        elif (torque_applied or self.alc.auto_lane_change_allowed) and not blindspot_detected:
           self.lane_change_state = LaneChangeState.laneChangeStarting
 
       # LaneChangeState.laneChangeStarting

@@ -47,27 +47,7 @@ Provide a supplemental, model-based visual/audio collision warning without braki
 
 Status: backlog. Observe-only validation must precede alerts.
 
-## Feature 7 — Vision Blind-Spot Monitor
-
-Use the driver-camera V-ASM detector from StarPilot PR #75 as an optional supplemental lane-change veto. Existing Nudge or blinker-only configuration remains authoritative. A detection can cancel a pending request but never initiates a lane change or sends steering commands.
-
-Phase 1 behavior:
-
-- Off restores the existing lane-change behavior exactly.
-- A Nudge made while the corresponding side is detected is consumed; torque must be released and a fresh Nudge supplied after the detection clears.
-- A blinker-only request detected as occupied is cancelled; the blinker must be cycled off and on before another request.
-- An already-started lane change is not reversed by the detector.
-- Visual cancellation is always shown; sound is controlled independently by `RivianPilotVisionBSMLoudAlert`.
-- A matching blinker and fresh Vision-BSM detection shows a side-specific screen alert before a lane-change request. Logging records only detection start/clear transitions and duration.
-- Missing, stale, overloaded, or failed detector output cannot generate steering and falls back to existing lane-change behavior.
-
-Status: experimental, default off. Based on the hardened OpenCV integration following StarPilot PR #75. Vehicle-camera polygon calibration and parked validation are required before road evaluation.
-
-`2026.007.017` fixes typed runtime parameter publication for detector state, confidence, timestamps, and lane-change blocks. The actual Rivian R1 driver-camera polygon is retained as both a persistent device parameter and a source-controlled recovery asset.
-
-`2026.007.018` makes Vision-BSM inference blinker-gated and fail-closed. It processes only the polygon matching one active blinker, clears state for no blinker or hazards, validates and safely crops the camera's NV12 frame, and records throttled frame dimensions plus the exception message when malformed input is rejected. Vision-BSM remains disabled by default. It also routes optional automatic lane-correction notifications through the in-memory parameter store consumed by the onroad UI; lane-position calculations and outputs are unchanged.
-
-`2026.007.019` removes the manual-turn recorder, its stored-package controls, and the location-specific path-replay concept. No recorded path is used for steering or future automatic turns.
+`2026.007.019` removes the manual-turn recorder, its stored-package controls, and the location-specific path-replay concept. It also removes the experimental Vision-BSM daemon, model, bundled OpenCV runtime, lane-change guard, alerts, and Sunnylink settings after on-device testing showed unacceptable resource contention. Native lane-change and blind-spot behavior is restored. The complete Vision-BSM experiment remains archived in branch `archive/vision-bsm-experiment-2026.007.018` for offline research.
 
 ## Removed or retired
 
@@ -79,6 +59,7 @@ Status: experimental, default off. Based on the hardened OpenCV integration foll
 - Steering Smoothness Slider
 - Startup Welcome/Welcome Name
 - Manual-turn recording and location-specific path replay
+- Vision-BSM camera inference and lane-change guard
 
 ## Diagnostics policy
 

@@ -373,6 +373,8 @@ struct OnroadEventSP @0xda96579883444c35 {
     rivianPilotLaneCorrectionAheadLeft @29;
     rivianPilotLaneCorrectionAheadRight @30;
     rivianMadsLowSpeedBlinkerPause @31;
+    # Retired Vision-BSM event ordinals. Keep these schema entries for wire
+    # compatibility; no runtime code emits or renders them.
     rivianPilotVisionBSMBlocked @32;
     rivianPilotVisionBSMBlockedLoud @33;
     rivianPilotVisionBSMDetectedLeft @34;
