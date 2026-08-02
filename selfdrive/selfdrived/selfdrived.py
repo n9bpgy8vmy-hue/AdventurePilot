@@ -26,7 +26,6 @@ from openpilot.system.hardware import HARDWARE
 
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
 from openpilot.sunnypilot.rivianpilot.lane_position_controller import LanePositionController
-from openpilot.sunnypilot.rivianpilot.manual_turn_recorder import ManualTurnRecorder
 from openpilot.sunnypilot.rivianpilot.vision_bsm import get_fresh_vision_bsm_state, get_matching_vision_bsm_side, get_vision_bsm_block, memory_params
 from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
@@ -183,7 +182,6 @@ class SelfdriveD(CruiseHelper):
 
     self.mads = ModularAssistiveDrivingSystem(self)
     self.lane_position_controller = None
-    self.manual_turn_recorder = None
     if self.CP.brand == "rivian":
       try:
         # Offset settings are persistent, while correction notifications must
@@ -192,14 +190,6 @@ class SelfdriveD(CruiseHelper):
       except Exception as e:
         try:
           cloudlog.event("rivianpilot feature error", feature="lane_position",
-                         errors=["initialization_failure_suppressed"], error_type=type(e).__name__)
-        except Exception:
-          pass
-      try:
-        self.manual_turn_recorder = ManualTurnRecorder(self.params)
-      except Exception as e:
-        try:
-          cloudlog.event("rivianpilot feature error", feature="manual_turn_recorder",
                          errors=["initialization_failure_suppressed"], error_type=type(e).__name__)
         except Exception:
           pass
@@ -570,16 +560,6 @@ class SelfdriveD(CruiseHelper):
         )
       except Exception as e:
         self.lane_position_controller.suppress_after_error(e)
-
-    if self.manual_turn_recorder is not None:
-      try:
-        gps = self.sm[self.gps_location_service] if gps_ok else None
-        self.manual_turn_recorder.update(
-          CS, gps, self.sm['modelV2'], self.sm['controlsState'], self.sm['carControl'],
-          self.sm['carOutput'], self.sm['livePose'],
-        )
-      except Exception as e:
-        self.manual_turn_recorder.suppress_after_error(e)
 
     # TODO: fix simulator
     if not SIMULATION or REPLAY:

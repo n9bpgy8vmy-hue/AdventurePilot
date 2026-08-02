@@ -35,25 +35,19 @@ Create a natural transfer of lateral authority from native Nudge lane change, to
 
 Status: on hold. Feature 2 diagnostics must first establish real Rivian timing and state sequences. Any future implementation must be separate and mutually exclusive with Classic Post-Turn Resume.
 
-## Feature 5 — Manual-Turn Recorder
-
-Store bounded, removable, observation-only turn packages for offline analysis. It must never replay a raw path or change steering, speed, MADS, or engagement.
-
-Status: observation-only implementation retained. Further short-blinker and package-quality improvements are deferred.
-
-## Feature 6 — Calibration Health
+## Feature 5 — Calibration Health
 
 Report calibration quality, stability, drift, mount-angle consistency, and conditions that may reduce lateral confidence.
 
 Status: backlog; diagnostic-only first phase.
 
-## Feature 7 — Forward Collision Warning+
+## Feature 6 — Forward Collision Warning+
 
 Provide a supplemental, model-based visual/audio collision warning without braking or steering commands. Rivian native FCW/AEB remains authoritative.
 
 Status: backlog. Observe-only validation must precede alerts.
 
-## Feature 8 — Vision Blind-Spot Monitor
+## Feature 7 — Vision Blind-Spot Monitor
 
 Use the driver-camera V-ASM detector from StarPilot PR #75 as an optional supplemental lane-change veto. Existing Nudge or blinker-only configuration remains authoritative. A detection can cancel a pending request but never initiates a lane change or sends steering commands.
 
@@ -73,6 +67,8 @@ Status: experimental, default off. Based on the hardened OpenCV integration foll
 
 `2026.007.018` makes Vision-BSM inference blinker-gated and fail-closed. It processes only the polygon matching one active blinker, clears state for no blinker or hazards, validates and safely crops the camera's NV12 frame, and records throttled frame dimensions plus the exception message when malformed input is rejected. Vision-BSM remains disabled by default. It also routes optional automatic lane-correction notifications through the in-memory parameter store consumed by the onroad UI; lane-position calculations and outputs are unchanged.
 
+`2026.007.019` removes the manual-turn recorder, its stored-package controls, and the location-specific path-replay concept. No recorded path is used for steering or future automatic turns.
+
 ## Removed or retired
 
 - Lane-hugging observer
@@ -82,6 +78,7 @@ Status: experimental, default off. Based on the hardened OpenCV integration foll
 - Redundant Lane Position Preference backlog entry
 - Steering Smoothness Slider
 - Startup Welcome/Welcome Name
+- Manual-turn recording and location-specific path replay
 
 ## Diagnostics policy
 

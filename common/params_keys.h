@@ -284,15 +284,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RivianPilotLaneCorrectionAlertAt", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, FLOAT, "0.0"}},
     {"RivianPilotDynamicCameraOffset", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, FLOAT, "0.0"}},
     {"RivianPilotDynamicCameraOffsetUpdated", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, FLOAT, "0.0"}},
-    {"RivianPilotManualTurnRecorder", {PERSISTENT | BACKUP, BOOL, "0"}},
-    {"RivianPilotManualTurnMaxSpeed", {PERSISTENT | BACKUP, INT, "35"}},  // MPH or km/h
-    {"RivianPilotManualTurnMaxPackages", {PERSISTENT | BACKUP, INT, "50"}},
-    {"RivianPilotManualTurnPackageCount", {PERSISTENT, INT, "0"}},
-    {"RivianPilotManualTurnPackageManifest", {PERSISTENT, JSON}},
-    {"RivianPilotManualTurnDeleteIndex", {PERSISTENT, INT, "1"}},  // oldest-first
-    {"RivianPilotManualTurnDeleteSelected", {PERSISTENT, BOOL, "0"}},
-    {"RivianPilotManualTurnDeleteOldest", {PERSISTENT, BOOL, "0"}},
-    {"RivianPilotManualTurnDeleteAll", {PERSISTENT, BOOL, "0"}},
     {"RivianPilotVisionBSMEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPilotVisionBSMLoudAlert", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPilotVisionBSMConfidenceThreshold", {PERSISTENT | BACKUP, FLOAT, "0.85"}},

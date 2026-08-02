@@ -149,7 +149,6 @@ jobs:
             python -m pytest -q \
               sunnypilot/mads/tests/test_rivian_mads_resume.py \
               sunnypilot/rivianpilot/tests/test_post_turn_resume.py \
-              sunnypilot/rivianpilot/tests/test_manual_turn_recorder.py \
               sunnypilot/rivianpilot/tests/test_lane_position_controller.py \
               sunnypilot/rivianpilot/tests/test_vision_bsm.py \
               sunnypilot/rivianpilot/tests/test_vision_bsm_inference.py \
