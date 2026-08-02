@@ -84,16 +84,18 @@ def test_curve_offset_is_bounded_and_away_from_inside():
 
 def test_lane_correction_alert_publishes_once_per_automatic_curve_episode():
   p = params()
+  memory = MagicMock()
   original_get_bool = p.get_bool.side_effect
   p.get_bool.side_effect = lambda key: True if key == "RivianPilotLaneCorrectionAlert" else original_get_bool(key)
-  feature = LanePositionController(p, p)
+  feature = LanePositionController(p, memory)
   establish_curve(feature, curvature=0.002)
 
-  direction_calls = [call for call in p.put.call_args_list if call.args and call.args[0] == "RivianPilotLaneCorrectionAlertDirection"]
+  direction_calls = [call for call in memory.put.call_args_list if call.args and call.args[0] == "RivianPilotLaneCorrectionAlertDirection"]
   assert len(direction_calls) == 1
   assert direction_calls[0].args[1] == "right"
-  inch_calls = [call for call in p.put.call_args_list if call.args and call.args[0] == "RivianPilotLaneCorrectionAlertInches"]
+  inch_calls = [call for call in memory.put.call_args_list if call.args and call.args[0] == "RivianPilotLaneCorrectionAlertInches"]
   assert inch_calls[-1].args[1] == 3
+  assert not any(call.args and call.args[0].startswith("RivianPilotLaneCorrectionAlert") for call in p.put.call_args_list)
 
 def test_curve_activates_at_configured_threshold():
   p = params()

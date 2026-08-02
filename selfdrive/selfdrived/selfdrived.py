@@ -186,7 +186,9 @@ class SelfdriveD(CruiseHelper):
     self.manual_turn_recorder = None
     if self.CP.brand == "rivian":
       try:
-        self.lane_position_controller = LanePositionController(self.params)
+        # Offset settings are persistent, while correction notifications must
+        # be published to the in-memory store consumed by this same process.
+        self.lane_position_controller = LanePositionController(self.params, self.params_memory)
       except Exception as e:
         try:
           cloudlog.event("rivianpilot feature error", feature="lane_position",

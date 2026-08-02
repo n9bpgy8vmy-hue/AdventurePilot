@@ -71,7 +71,7 @@ Status: experimental, default off. Based on the hardened OpenCV integration foll
 
 `2026.007.017` fixes typed runtime parameter publication for detector state, confidence, timestamps, and lane-change blocks. The actual Rivian R1 driver-camera polygon is retained as both a persistent device parameter and a source-controlled recovery asset.
 
-`2026.007.018` makes Vision-BSM inference blinker-gated and fail-closed. It processes only the polygon matching one active blinker, clears state for no blinker or hazards, validates and safely crops the camera's NV12 frame, and records throttled frame dimensions plus the exception message when malformed input is rejected. Vision-BSM remains disabled by default.
+`2026.007.018` makes Vision-BSM inference blinker-gated and fail-closed. It processes only the polygon matching one active blinker, clears state for no blinker or hazards, validates and safely crops the camera's NV12 frame, and records throttled frame dimensions plus the exception message when malformed input is rejected. Vision-BSM remains disabled by default. It also routes optional automatic lane-correction notifications through the in-memory parameter store consumed by the onroad UI; lane-position calculations and outputs are unchanged.
 
 ## Removed or retired
 
