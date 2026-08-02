@@ -5,15 +5,16 @@ from opendbc.car import structs
 
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
+from openpilot.sunnypilot.rivianpilot.vision_bsm import memory_params
 
 
 INCH_TO_M = 0.0254
 # Rivian lists the R1T at 82.0 inches with the mirrors folded and 88.4 inches
 # with them open. Painted-lane containment uses the folded-width envelope:
 # mirrors can cross a painted line without the truck body or tires leaving it.
-R1T_LANE_ENVELOPE_M = 82.0 * INCH_TO_M
-R1T_HALF_LANE_ENVELOPE_M = R1T_LANE_ENVELOPE_M / 2.0
-BOUNDARY_MARGIN_M = 5.0 * INCH_TO_M
+DEFAULT_R1T_WIDTH_INCHES = 82
+DEFAULT_BOUNDARY_BUFFER_INCHES = 5
+DEFAULT_POOR_ROAD_OFFSET_INCHES = 2
 MAX_CUSTOM_OFFSET_M = 10.0 * INCH_TO_M
 SAMPLE_DISTANCE_M = 20.0
 MIN_LANE_PROBABILITY = 0.65
@@ -31,7 +32,6 @@ CURVE_CLEARANCE_FILTER_SAMPLES = 5
 CURVE_GEOMETRY_MISS_LIMIT = 3
 CURVE_RAMP_IN_MPS = 3.0 * INCH_TO_M
 CURVE_RAMP_OUT_MPS = 8.0 * INCH_TO_M
-RELAXED_MAX_OFFSET_M = 2.0 * INCH_TO_M
 PREDICTIVE_LOOKAHEAD_START_S = 0.5
 PREDICTIVE_LOOKAHEAD_END_S = 2.0
 PREDICTIVE_DIRECTION_STABLE_FRAMES = 3
@@ -48,8 +48,9 @@ class LanePositionController:
   offset consumed by modeld; every invalid or uncertain state publishes zero.
   """
 
-  def __init__(self, params: Params | None = None):
+  def __init__(self, params: Params | None = None, params_memory: Params | None = None):
     self.params = params or Params()
+    self.params_memory = params_memory if params_memory is not None else (params if params is not None else memory_params())
     self.observe = False
     self.go_live = False
     self.feature_logging = False
@@ -60,6 +61,11 @@ class LanePositionController:
     self.curve_threshold_pct = 35
     self.nudge_offset_inches = 3
     self.nudge_hold_seconds = 10
+    self.correction_alert_enabled = False
+    self.vehicle_width_inches = DEFAULT_R1T_WIDTH_INCHES
+    self.boundary_buffer_inches = DEFAULT_BOUNDARY_BUFFER_INCHES
+    self.poor_road_offset_inches = DEFAULT_POOR_ROAD_OFFSET_INCHES
+    self.last_alert_episode = 0
     self.last_param_read = 0.0
     self.last_update = 0.0
     self.last_heartbeat = 0.0
@@ -108,6 +114,31 @@ class LanePositionController:
     self.curve_threshold_pct = max(10, min(90, int(self.params.get("RivianPilotCurveThreshold", return_default=True))))
     self.nudge_offset_inches = max(2, min(10, int(self.params.get("RivianPilotNudgeOffsetInches", return_default=True))))
     self.nudge_hold_seconds = max(5, min(60, int(self.params.get("RivianPilotNudgeHoldSeconds", return_default=True))))
+    try:
+      self.correction_alert_enabled = self.params.get_bool("RivianPilotLaneCorrectionAlert")
+      self.vehicle_width_inches = max(78, min(86, int(self.params.get("RivianPilotVehicleWidthInches", return_default=True))))
+      self.boundary_buffer_inches = max(3, min(12, int(self.params.get("RivianPilotBoundaryBufferInches", return_default=True))))
+      self.poor_road_offset_inches = max(1, min(10, int(self.params.get("RivianPilotPoorRoadOffsetInches", return_default=True))))
+    except (KeyError, TypeError, ValueError):
+      self.correction_alert_enabled = False
+
+  def _publish_correction_alert(self, target_m: float, source: str, now: float) -> None:
+    if (not self.correction_alert_enabled or not self.go_live or
+        not source.startswith("automatic_curve") or abs(target_m) < 0.5 * INCH_TO_M or
+        self.last_alert_episode == self.curve_episode_id):
+      return
+    try:
+      direction = "left" if target_m > 0.0 else "right"
+      inches = max(1, min(10, int(round(abs(target_m) / INCH_TO_M))))
+      self.params_memory.put("RivianPilotLaneCorrectionAlertDirection", direction)
+      self.params_memory.put("RivianPilotLaneCorrectionAlertInches", inches)
+      self.params_memory.put("RivianPilotLaneCorrectionAlertAt", float(now))
+      self.last_alert_episode = self.curve_episode_id
+      self._log("correction_alert", episode_id=self.curve_episode_id, direction=direction,
+                approved_inches=inches, source=source)
+    except Exception as e:
+      # Notification is optional and must never affect the offset controller.
+      self._log("correction_alert_failure_suppressed", error_type=type(e).__name__)
 
   def _log(self, action: str, **kwargs) -> None:
     if not self.feature_logging:
@@ -152,8 +183,7 @@ class LanePositionController:
       self.last_output = 0.0
       raise
 
-  @staticmethod
-  def _sample_geometry(model, corridor_horizon_m: float = SAMPLE_DISTANCE_M) -> tuple[float, float, float, float, float, float, float]:
+  def _sample_geometry(self, model, corridor_horizon_m: float = SAMPLE_DISTANCE_M) -> tuple[float, float, float, float, float, float, float]:
     probs = list(model.laneLineProbs)
     lines = list(model.laneLines)
     path_x = list(model.position.x)
@@ -196,8 +226,10 @@ class LanePositionController:
     width_delta = max(corridor_widths) - min(corridor_widths)
     if width_delta > FORK_WIDTH_DELTA_M:
       raise ValueError("fork or merge")
-    driver_left_clearance = path - left - R1T_HALF_LANE_ENVELOPE_M - BOUNDARY_MARGIN_M
-    driver_right_clearance = right - path - R1T_HALF_LANE_ENVELOPE_M - BOUNDARY_MARGIN_M
+    half_vehicle_width_m = self.vehicle_width_inches * INCH_TO_M / 2.0
+    boundary_buffer_m = self.boundary_buffer_inches * INCH_TO_M
+    driver_left_clearance = path - left - half_vehicle_width_m - boundary_buffer_m
+    driver_right_clearance = right - path - half_vehicle_width_m - boundary_buffer_m
     return (width, path, max(0.0, driver_left_clearance),
             max(0.0, driver_right_clearance), float(probs[1]), float(probs[2]), width_delta)
 
@@ -387,6 +419,7 @@ class LanePositionController:
     movement_clearance = None
     safety_capped = False
     reference_state = "not_needed"
+    target = 0.0
     base_camera_offset = 0.0
     try:
       base_camera_offset = self._finite(self.params.get("CameraOffset", return_default=True))
@@ -458,7 +491,9 @@ class LanePositionController:
             # The model path reacts to the published camera transform. Add the
             # current output back before filtering so the feature cannot cancel
             # itself, while allowing a bad initial sample to recover.
-            total_clearance_budget = max(0.0, width - R1T_LANE_ENVELOPE_M - 2.0 * BOUNDARY_MARGIN_M)
+            vehicle_width_m = self.vehicle_width_inches * INCH_TO_M
+            boundary_buffer_m = self.boundary_buffer_inches * INCH_TO_M
+            total_clearance_budget = max(0.0, width - vehicle_width_m - 2.0 * boundary_buffer_m)
             compensated_clearance = min(total_clearance_budget,
                                         max(0.0, movement_clearance + abs(self.automatic_output)))
             self.curve_reference_samples.append(compensated_clearance)
@@ -487,9 +522,14 @@ class LanePositionController:
           target = math.copysign(min(abs(requested), self.curve_reference_clearance), requested)
           safety_capped = abs(target) + 1e-6 < abs(requested)
         elif not self.fork_hold and self.relaxed_geometry and self.curve_geometry_misses >= CURVE_GEOMETRY_MISS_LIMIT:
-          # Explicit opt-in for poorly marked roads. This never exceeds two
-          # inches and remains subordinate to driver steering and core control.
-          target = math.copysign(min(abs(requested), RELAXED_MAX_OFFSET_M), requested)
+          # Explicit opt-in for poorly marked roads. The configured request is
+          # bounded again below and remains subordinate to driver steering and
+          # core control.
+          # The driver selects up to ten inches, but weak geometry cannot prove
+          # opposite-boundary clearance. Keep the unverified effective cap at
+          # three inches; logs and alerts always report the approved value.
+          unverified_cap_m = min(self.poor_road_offset_inches, 3) * INCH_TO_M
+          target = math.copysign(min(abs(requested), unverified_cap_m), requested)
           reference_state = "relaxed"
           safety_capped = abs(target) + 1e-6 < abs(requested)
         else:
@@ -523,6 +563,7 @@ class LanePositionController:
         applied = self.automatic_output
 
     self._publish(applied)
+    self._publish_correction_alert(target, source, now)
     diagnostics = self._safe_diagnostics(CS, model, controls, car_control, car_output) if self.feature_logging else {}
     if now - self.last_sample_log >= SAMPLE_LOG_PERIOD_SECONDS:
       lane_fields = {}
@@ -549,6 +590,9 @@ class LanePositionController:
                 episode_age_s=round(now - self.curve_episode_started, 2) if self.curve_episode_started else None,
                 configured_offset_inches=self.curve_offset_inches,
                 configured_threshold_pct=self.curve_threshold_pct,
+                configured_vehicle_width_inches=self.vehicle_width_inches,
+                configured_boundary_buffer_inches=self.boundary_buffer_inches,
+                configured_poor_road_offset_inches=self.poor_road_offset_inches,
                 relaxed_geometry=self.relaxed_geometry,
                 base_offset_m=round(base_offset, 4),
                 requested_offset_m=round(requested, 4),
@@ -562,8 +606,10 @@ class LanePositionController:
                 published_offset_m=round(self.last_output or 0.0, 4),
                 base_camera_offset_m=round(base_camera_offset, 4),
                 effective_target_offset_m=round(base_camera_offset + applied, 4),
-                geometry_status=geometry_status, r1t_lane_envelope_m=round(R1T_LANE_ENVELOPE_M, 4),
-                boundary_margin_m=BOUNDARY_MARGIN_M, go_live=self.go_live, observe=self.observe,
+                geometry_status=geometry_status,
+                r1t_lane_envelope_m=round(self.vehicle_width_inches * INCH_TO_M, 4),
+                boundary_margin_m=round(self.boundary_buffer_inches * INCH_TO_M, 4),
+                approved_target_offset_m=round(target, 4), go_live=self.go_live, observe=self.observe,
                 **lane_fields, **diagnostics)
       self.last_sample_log = now
 

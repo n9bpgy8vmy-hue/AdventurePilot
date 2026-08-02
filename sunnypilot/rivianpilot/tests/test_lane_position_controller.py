@@ -18,6 +18,10 @@ def params():
     "RivianPilotCurveThreshold": 35,
     "RivianPilotNudgeOffsetInches": 3,
     "RivianPilotNudgeHoldSeconds": 10,
+    "RivianPilotLaneCorrectionAlert": False,
+    "RivianPilotVehicleWidthInches": 82,
+    "RivianPilotBoundaryBufferInches": 5,
+    "RivianPilotPoorRoadOffsetInches": 2,
     "CameraOffset": 0.0,
   }
   p = MagicMock()
@@ -77,6 +81,19 @@ def test_curve_offset_is_bounded_and_away_from_inside():
   assert feature.last_output > 0.0
   assert abs(feature.last_output) <= 3 * 0.0254
 
+
+def test_lane_correction_alert_publishes_once_per_automatic_curve_episode():
+  p = params()
+  original_get_bool = p.get_bool.side_effect
+  p.get_bool.side_effect = lambda key: True if key == "RivianPilotLaneCorrectionAlert" else original_get_bool(key)
+  feature = LanePositionController(p, p)
+  establish_curve(feature, curvature=0.002)
+
+  direction_calls = [call for call in p.put.call_args_list if call.args and call.args[0] == "RivianPilotLaneCorrectionAlertDirection"]
+  assert len(direction_calls) == 1
+  assert direction_calls[0].args[1] == "right"
+  inch_calls = [call for call in p.put.call_args_list if call.args and call.args[0] == "RivianPilotLaneCorrectionAlertInches"]
+  assert inch_calls[-1].args[1] == 3
 
 def test_curve_activates_at_configured_threshold():
   p = params()

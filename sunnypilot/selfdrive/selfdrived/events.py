@@ -11,6 +11,7 @@ from openpilot.sunnypilot.selfdrive.selfdrived.events_base import EventsBase, Pr
   NoEntryAlert, ImmediateDisableAlert, EngagementAlert, NormalPermanentAlert, AlertCallbackType, wrong_car_mode_alert
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED, CONFIRM_SPEED_THRESHOLD
 from openpilot.system.hardware import HARDWARE
+from openpilot.sunnypilot.rivianpilot.vision_bsm import memory_params
 
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
@@ -78,6 +79,26 @@ def rivian_mads_resume_warning_alert(delay: int) -> Alert:
     f"Lane centering resumes in {delay} second{'s' if delay != 1 else ''}",
     AlertStatus.normal, AlertSize.mid,
     Priority.MID, VisualAlert.none, AudibleAlert.prompt, float(delay))
+
+
+def rivian_lane_correction_alert(direction: str) -> Alert:
+  try:
+    inches = max(1, min(10, int(memory_params().get("RivianPilotLaneCorrectionAlertInches") or 1)))
+  except (TypeError, ValueError):
+    inches = 1
+  return Alert(
+    f"{inches} inch correction to move {direction}",
+    "",
+    AlertStatus.normal, AlertSize.small,
+    Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 1.)
+
+
+def rivian_lane_correction_left_alert(*_args) -> Alert:
+  return rivian_lane_correction_alert("left")
+
+
+def rivian_lane_correction_right_alert(*_args) -> Alert:
+  return rivian_lane_correction_alert("right")
 
 
 class EventsSP(EventsBase):
@@ -273,6 +294,12 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "",
       AlertStatus.normal, AlertSize.small,
       Priority.HIGH, VisualAlert.none, AudibleAlertSP.promptDouble, 2.),
+  },
+  EventNameSP.rivianPilotLaneCorrectionAheadLeft: {
+    ET.PERMANENT: rivian_lane_correction_left_alert,
+  },
+  EventNameSP.rivianPilotLaneCorrectionAheadRight: {
+    ET.PERMANENT: rivian_lane_correction_right_alert,
   },
   EventNameSP.rivianPilotVisionBSMBlocked: {
     ET.PERMANENT: Alert(

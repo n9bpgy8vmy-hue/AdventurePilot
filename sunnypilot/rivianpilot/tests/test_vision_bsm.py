@@ -8,6 +8,7 @@ from openpilot.sunnypilot.rivianpilot.vision_bsm import (
   get_matching_vision_bsm_side,
   get_vision_bsm_block,
 )
+from openpilot.sunnypilot.rivianpilot.vision_bsmd import VisionBSMDaemon
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeMode
 
 
@@ -26,6 +27,22 @@ class FakeParams:
 
   def put(self, key, value):
     self.values[key] = value
+
+
+def test_daemon_reads_typed_float_params_without_get_float_api():
+  params = FakeParams({
+    "RivianPilotVisionBSMEnabled": True,
+    "RivianPilotFeatureLogging": True,
+    "RivianPilotVisionBSMConfidenceThreshold": 0.75,
+    "RivianPilotVisionBSMSmoothSeconds": 0.3,
+  })
+  params.get_bool = lambda key: bool(params.values[key])
+  params.get = lambda key, **_kwargs: params.values[key]
+  daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
+  daemon.params = params
+  daemon._cache_params()
+  assert daemon._confidence_threshold == 0.75
+  assert daemon._smooth_seconds == 0.3
 
 
 def detector_state(now=100.0, left=False, right=False):

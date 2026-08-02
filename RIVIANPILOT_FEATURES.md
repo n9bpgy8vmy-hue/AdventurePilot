@@ -27,6 +27,8 @@ Modes:
 
 Status: Go Live has completed successful vehicle testing. `2026.007.002` preserves control behavior and expands diagnostics with torque, controller, curvature, steering, lane/road-edge confidence, boundary clearance, and requested/capped/published offset data.
 
+`2026.007.016` adds bounded vehicle-width, boundary-buffer, and poorly-marked-road request settings plus an optional once-per-episode correction message/chime. The requested poorly-marked-road value is configurable from 1–10 inches; without trustworthy boundary clearance the effective runtime approval remains capped at three inches.
+
 ## Feature 4 — Experimental Lane-Change-to-Turn Handover
 
 Create a natural transfer of lateral authority from native Nudge lane change, to a driver-controlled turn, and back to MADS after the new road is stable.

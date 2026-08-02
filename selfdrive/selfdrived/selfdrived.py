@@ -118,6 +118,7 @@ class SelfdriveD(CruiseHelper):
     self.vision_bsm_enabled = self.params.get_bool("RivianPilotVisionBSMEnabled")
     self.vision_bsm_loud_alert = self.params.get_bool("RivianPilotVisionBSMLoudAlert")
     self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
+    self.lane_correction_alert_enabled = self.params.get_bool("RivianPilotLaneCorrectionAlert")
     self.vision_bsm_matching_side = ""
     self.vision_bsm_matching_since = 0.0
 
@@ -415,6 +416,21 @@ class SelfdriveD(CruiseHelper):
           pass
       self.vision_bsm_matching_side = ""
       self.vision_bsm_matching_since = 0.0
+
+    if self.CP.brand == "rivian" and self.lane_correction_alert_enabled:
+      try:
+        alert_at = float(self.params_memory.get("RivianPilotLaneCorrectionAlertAt") or 0.0)
+        alert_age = time.monotonic() - alert_at
+        direction = self.params_memory.get("RivianPilotLaneCorrectionAlertDirection")
+        if isinstance(direction, bytes):
+          direction = direction.decode("utf-8", errors="ignore")
+        if 0.0 <= alert_age <= 1.0:
+          if direction == "left":
+            self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadLeft)
+          elif direction == "right":
+            self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadRight)
+      except (TypeError, ValueError):
+        pass
 
     # Handle lane turn
     lane_turn_direction = self.sm['modelDataV2SP'].laneTurnDirection
@@ -725,6 +741,7 @@ class SelfdriveD(CruiseHelper):
       self.vision_bsm_enabled = self.params.get_bool("RivianPilotVisionBSMEnabled")
       self.vision_bsm_loud_alert = self.params.get_bool("RivianPilotVisionBSMLoudAlert")
       self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
+      self.lane_correction_alert_enabled = self.params.get_bool("RivianPilotLaneCorrectionAlert")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
 

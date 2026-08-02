@@ -103,8 +103,10 @@ class VisionBSMDaemon:
   def _cache_params(self) -> None:
     self._enabled = self.params.get_bool("RivianPilotVisionBSMEnabled")
     self._logging_enabled = self.params.get_bool("RivianPilotFeatureLogging")
-    threshold = self.params.get_float("RivianPilotVisionBSMConfidenceThreshold") or 0.85
-    smoothing = self.params.get_float("RivianPilotVisionBSMSmoothSeconds") or 0.2
+    # This AdventurePilot Params binding returns typed values from get(); it
+    # intentionally has no get_float() convenience method.
+    threshold = float(self.params.get("RivianPilotVisionBSMConfidenceThreshold", return_default=True) or 0.85)
+    smoothing = float(self.params.get("RivianPilotVisionBSMSmoothSeconds", return_default=True) or 0.2)
     self._confidence_threshold = min(max(threshold, 0.25), 1.0)
     self._smooth_seconds = min(max(smoothing, 0.1), 0.5)
 
