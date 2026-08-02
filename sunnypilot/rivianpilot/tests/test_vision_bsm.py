@@ -1,4 +1,6 @@
 from cereal import log
+import numpy as np
+import pytest
 
 from openpilot.sunnypilot.rivianpilot.vision_bsm import (
   VBSM_BLOCK_TIMEOUT_SECONDS,
@@ -75,6 +77,42 @@ def test_daemon_and_guard_publish_typed_runtime_params():
   guard = make_guard(memory)
   guard._publish_block(LaneChangeDirection.left, "test", VisionBSMState(left=True, fresh=True), now=100.0)
   guard.clear_block("test")
+
+
+class FakeCarState:
+  def __init__(self, left=False, right=False):
+    self.leftBlinker = left
+    self.rightBlinker = right
+
+
+def test_daemon_only_requests_matching_mirrored_camera_side():
+  assert VisionBSMDaemon._requested_camera_side(FakeCarState(left=True)) == "right"
+  assert VisionBSMDaemon._requested_camera_side(FakeCarState(right=True)) == "left"
+  assert VisionBSMDaemon._requested_camera_side(FakeCarState()) == ""
+  assert VisionBSMDaemon._requested_camera_side(FakeCarState(left=True, right=True)) == ""
+
+
+def test_decode_nv12_frame_crops_padding_and_ignores_trailing_alignment():
+  width, height, stride = 4, 4, 6
+  expected_rows = height * 3 // 2
+  data = bytes(range(expected_rows * stride)) + b"trailing"
+  frame = VisionBSMDaemon._decode_nv12_frame(data, width, height, stride)
+
+  assert frame.shape == (expected_rows, width)
+  assert frame.flags.c_contiguous
+  np.testing.assert_array_equal(frame[0], [0, 1, 2, 3])
+  np.testing.assert_array_equal(frame[1], [6, 7, 8, 9])
+
+
+@pytest.mark.parametrize("width,height,stride,data,error", [
+  (0, 4, 6, b"", "invalid camera geometry"),
+  (7, 4, 6, bytes(36), "exceeds stride"),
+  (4, 3, 6, bytes(27), "height must be even"),
+  (4, 4, 6, bytes(35), "short camera buffer"),
+])
+def test_decode_nv12_frame_rejects_invalid_input(width, height, stride, data, error):
+  with pytest.raises(ValueError, match=error):
+    VisionBSMDaemon._decode_nv12_frame(data, width, height, stride)
 
 
 def detector_state(now=100.0, left=False, right=False):

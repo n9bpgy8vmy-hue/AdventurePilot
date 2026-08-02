@@ -92,6 +92,7 @@ class VisionBSMDaemon:
     self._last_published = (None, None, None, None)
     self._last_update_at = None
     self._last_active = (False, False)
+    self._requested_side = ""
     self._affinity_set = False
 
     self._cache_params()
@@ -228,16 +229,50 @@ class VisionBSMDaemon:
     except Exception:
       pass
 
-  def _log_error(self, reason: str, exc: Exception) -> None:
+  def _log_error(self, reason: str, exc: Exception, **context) -> None:
     now = time.monotonic()
     if now - self._last_error_log < ERROR_LOG_INTERVAL:
       return
     self._last_error_log = now
     try:
       cloudlog.event("rivianpilot feature error", feature="vision_bsmd",
-                     errors=[reason], error_type=type(exc).__name__)
+                     errors=[reason], error_type=type(exc).__name__,
+                     error_message=str(exc)[:240], **context)
     except Exception:
       pass
+
+  @staticmethod
+  def _requested_camera_side(CS) -> str:
+    """Map one active vehicle blinker to PR #75's mirrored driver-camera side."""
+    left_blinker = bool(CS.leftBlinker)
+    right_blinker = bool(CS.rightBlinker)
+    if left_blinker == right_blinker:
+      return ""
+    return "right" if left_blinker else "left"
+
+  @staticmethod
+  def _decode_nv12_frame(data, width: int, height: int, stride: int) -> np.ndarray:
+    """Return a tightly cropped NV12 frame or reject malformed camera metadata/data."""
+    if data is None:
+      raise ValueError("camera buffer data is missing")
+    if width <= 0 or height <= 0 or stride <= 0:
+      raise ValueError(f"invalid camera geometry width={width} height={height} stride={stride}")
+    if width > stride:
+      raise ValueError(f"camera width {width} exceeds stride {stride}")
+    if height % 2:
+      raise ValueError(f"NV12 camera height must be even: {height}")
+
+    expected_rows = height * 3 // 2
+    expected_bytes = expected_rows * stride
+    byte_count = len(data)
+    if byte_count < expected_bytes:
+      raise ValueError(f"short camera buffer bytes={byte_count} expected={expected_bytes}")
+
+    # VisionIPC buffers may contain trailing alignment bytes. Decode only the
+    # declared NV12 image and remove per-row padding before inference.
+    flat = np.frombuffer(data, dtype=np.uint8, count=expected_bytes)
+    padded = flat.reshape((expected_rows, stride))
+    return np.ascontiguousarray(padded[:, :width])
 
   def run(self) -> None:
     rk = Ratekeeper(10, None)
@@ -254,6 +289,16 @@ class VisionBSMDaemon:
         parked = (self.sm.valid.get("carState", False) and
                   self.sm["carState"].gearShifter == car.CarState.GearShifter.park)
         if not onroad or parked or not self._enabled or not self.inference.valid or not self._annotation_loaded:
+          self._set_inactive(reset=True)
+          rk.keep_time()
+          continue
+        requested_side = (self._requested_camera_side(self.sm["carState"])
+                          if self.sm.valid.get("carState", False) else "")
+        if requested_side != self._requested_side:
+          self._requested_side = requested_side
+          self._set_inactive(reset=True)
+          self._log("blinker_gate", active=bool(requested_side), camera_side=requested_side or "none")
+        if not requested_side:
           self._set_inactive(reset=True)
           rk.keep_time()
           continue
@@ -278,20 +323,25 @@ class VisionBSMDaemon:
           continue
 
         sides = self.inference.configured_sides
-        if not sides:
+        if requested_side not in sides:
           self._set_inactive(reset=True)
           rk.keep_time()
           continue
-        if self.current_side not in sides:
-          self.current_side = sides[0]
-        last_side_at = self.last_inference_by_side[self.current_side]
+        self.current_side = requested_side
+        last_side_at = self.last_inference_by_side[requested_side]
         dt = now - last_side_at if last_side_at else interval
         self.last_inference_at = now
-        self.last_inference_by_side[self.current_side] = now
+        self.last_inference_by_side[requested_side] = now
 
-        image = np.frombuffer(buffer.data, dtype=np.uint8).reshape((len(buffer.data) // self.client.stride, self.client.stride))
-        if self.client.stride != self.client.width:
-          image = image[:, :self.client.width]
+        try:
+          image = self._decode_nv12_frame(buffer.data, self.client.width, self.client.height, self.client.stride)
+        except (TypeError, ValueError) as exc:
+          self._log_error("camera_frame_rejected", exc,
+                          buffer_bytes=(len(buffer.data) if buffer.data is not None else 0),
+                          width=self.client.width, height=self.client.height, stride=self.client.stride)
+          self._set_inactive(reset=True)
+          rk.keep_time()
+          continue
         inference_started = time.monotonic()
         left, right = self.inference.update(image, self.client.width, self.client.height, dt,
                                             self._confidence_threshold, self._smooth_seconds, self.current_side)
@@ -300,9 +350,6 @@ class VisionBSMDaemon:
         self._publish(left, right, self.inference.confidence["left"], self.inference.confidence["right"], now)
         if left or right:
           self.followup_until = now + FOLLOWUP_WINDOW
-        side_index = sides.index(self.current_side)
-        self.current_side = sides[(side_index + 1) % len(sides)]
-
         if now - self._last_status_log >= STATUS_LOG_INTERVAL:
           cpu = self._cpu_usage()
           self._log("status", inference_count=self._inference_count, latency_ms=self._last_latency_ms,
