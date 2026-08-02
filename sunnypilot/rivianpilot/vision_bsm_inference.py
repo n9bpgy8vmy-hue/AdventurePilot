@@ -1,6 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+
+
+# Prebuilt devices use comma's fixed runtime environment, which does not include
+# OpenCV. The prebuilt workflow vendors the ARM64 wheel here so updater cleanup
+# cannot remove it as an untracked installation.
+VISION_BSM_VENDOR_DIR = Path(__file__).resolve().parents[2] / "third_party" / "vision_bsm_python"
+if VISION_BSM_VENDOR_DIR.is_dir():
+  sys.path.insert(0, str(VISION_BSM_VENDOR_DIR))
 
 import cv2
 import numpy as np

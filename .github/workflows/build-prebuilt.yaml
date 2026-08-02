@@ -117,6 +117,25 @@ jobs:
           scons -j4 cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal
           touch ${BUILD_DIR}/prebuilt
 
+      - name: Vendor Vision-BSM OpenCV runtime
+        run: |
+          # Install into the release tree itself. The publish job commits these
+          # files, so updater reset/clean operations cannot remove them.
+          uv pip install \
+            --target "${BUILD_DIR}/third_party/vision_bsm_python" \
+            --python /usr/local/venv/bin/python \
+            --no-deps \
+            "opencv-python-headless==4.13.0.92"
+
+          test -d "${BUILD_DIR}/third_party/vision_bsm_python/cv2"
+          find "${BUILD_DIR}/third_party/vision_bsm_python/cv2" \
+            -maxdepth 1 -type f -name 'cv2*.so' -print -quit | grep -q .
+
+          # Validate with the exact Python used by Manager, not the build venv.
+          cd "${BUILD_DIR}"
+          PYTHONPATH="${BUILD_DIR}" /usr/local/venv/bin/python -c \
+            'from openpilot.sunnypilot.rivianpilot.vision_bsm_inference import VisionBSMInference; import cv2; print("bundled cv2", cv2.__version__)'
+
       - name: Test active RivianPilot features
         run: |
           cd $BUILD_DIR
@@ -184,6 +203,12 @@ jobs:
             exit 1
           fi
           echo "OK: no LFS pointer stubs or oversized files in output."
+
+      - name: Guard - bundled Vision-BSM OpenCV is present
+        run: |
+          test -d "${OUTPUT_DIR}/third_party/vision_bsm_python/cv2"
+          find "${OUTPUT_DIR}/third_party/vision_bsm_python/cv2" \
+            -maxdepth 1 -type f -name 'cv2*.so' -print -quit | grep -q .
 
       - name: Tar files
         run: |
