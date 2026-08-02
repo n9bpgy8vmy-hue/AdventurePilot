@@ -215,6 +215,46 @@ sections:
     - type: param
       key: RivianPilotLanePositionObserve
       equals: true
+  - key: RivianPilotLaneCorrectionAlert
+    widget: toggle
+    title: Lane Correction Notification
+    description: Show one message and play one chime when a new automatic curve correction receives a nonzero safety-approved target.
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotLanePositionGoLive
+      equals: true
+  - key: RivianPilotVehicleWidthInches
+    widget: option
+    title: Vehicle Body Width
+    description: Body-width envelope used for lane-clearance calculations. Mirrors are excluded.
+    min: 78
+    max: 86
+    step: 1
+    unit: inches
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - $ref: '#/macros/offroad'
+  - key: RivianPilotBoundaryBufferInches
+    widget: option
+    title: Boundary Comfort Buffer
+    description: Minimum desired body clearance from each confidently detected painted lane boundary.
+    min: 3
+    max: 12
+    step: 1
+    unit: inches
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - $ref: '#/macros/offroad'
   - key: RivianPilotCurveOffsetInches
     widget: option
     title: Maximum Curve Offset
@@ -259,6 +299,23 @@ sections:
     - $ref: '#/macros/offroad'
     - type: param
       key: RivianPilotCurveOffset
+      equals: true
+  - key: RivianPilotPoorRoadOffsetInches
+    widget: option
+    title: Poorly Marked Road Offset Request
+    description: Requested maximum from 1 to 10 inches. Without trustworthy boundary clearance, runtime approval remains capped at three inches.
+    min: 1
+    max: 10
+    step: 1
+    unit: inches
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - $ref: '#/macros/offroad'
+    - type: param
+      key: RivianPilotLanePositionRelaxed
       equals: true
   - key: RivianPilotNudgeOffset
     widget: toggle
