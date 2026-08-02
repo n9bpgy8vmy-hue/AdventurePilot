@@ -78,6 +78,45 @@ def test_curve_offset_is_bounded_and_away_from_inside():
   assert abs(feature.last_output) <= 3 * 0.0254
 
 
+def test_curve_activates_at_configured_threshold():
+  p = params()
+  values = {
+    "RivianPilotLanePositionObserve": True, "RivianPilotLanePositionGoLive": True,
+    "RivianPilotFeatureLogging": False, "RivianPilotCurveOffset": True,
+    "RivianPilotLanePositionRelaxed": False, "RivianPilotNudgeOffset": True,
+  }
+  p.get_bool.side_effect = lambda key: values[key]
+  original_get = p.get.side_effect
+  p.get.side_effect = lambda key, **kwargs: 30 if key == "RivianPilotCurveThreshold" else original_get(key, **kwargs)
+  feature = LanePositionController(p)
+
+  # 0.001 curvature at 30 m/s is 0.9 m/s^2, exactly 30% of the
+  # controller's 3.0 m/s^2 reference lateral acceleration.
+  establish_curve(feature, curvature=0.001)
+
+  assert feature.curve_threshold_pct == 30
+  assert feature.curve_active
+  assert feature.last_output < 0.0
+
+
+def test_curve_does_not_activate_below_configured_threshold():
+  p = params()
+  values = {
+    "RivianPilotLanePositionObserve": True, "RivianPilotLanePositionGoLive": True,
+    "RivianPilotFeatureLogging": False, "RivianPilotCurveOffset": True,
+    "RivianPilotLanePositionRelaxed": False, "RivianPilotNudgeOffset": True,
+  }
+  p.get_bool.side_effect = lambda key: values[key]
+  original_get = p.get.side_effect
+  p.get.side_effect = lambda key, **kwargs: 30 if key == "RivianPilotCurveThreshold" else original_get(key, **kwargs)
+  feature = LanePositionController(p)
+
+  establish_curve(feature, curvature=0.00099)
+
+  assert not feature.curve_active
+  assert feature.last_output == 0.0
+
+
 def test_dynamic_offset_params_are_written_as_runtime_float_types():
   p = params()
   LanePositionController(p)
@@ -359,6 +398,46 @@ def test_go_live_logs_torque_and_controller_diagnostics(mocker):
   assert sample.kwargs["applied_torque"] == 0.2
   assert sample.kwargs["controller_type"] == "torqueState"
   assert sample.kwargs["controller_saturated"]
+
+
+def test_logging_omits_none_and_reports_previous_failures(mocker):
+  p = params()
+  original_get_bool = p.get_bool.side_effect
+  p.get_bool.side_effect = lambda key: True if key == "RivianPilotFeatureLogging" else original_get_bool(key)
+  event = mocker.patch("openpilot.sunnypilot.rivianpilot.lane_position_controller.cloudlog.event")
+  error = mocker.patch("openpilot.sunnypilot.rivianpilot.lane_position_controller.cloudlog.error")
+  feature = LanePositionController(p)
+  event.reset_mock()
+  event.side_effect = [ValueError("bad diagnostic field"), None]
+
+  feature._log("sample", optional=None, valid=1.0)
+  feature._log("sample", optional=None, valid=2.0)
+
+  assert feature.feature_logging
+  assert feature.log_failure_count == 1
+  assert not feature.faulted
+  assert error.call_count == 1
+  assert "optional" not in event.call_args.kwargs
+  assert event.call_args.kwargs["valid"] == 2.0
+  assert event.call_args.kwargs["log_failure_count"] == 1
+
+
+def test_logging_failure_never_changes_curve_output(mocker):
+  p = params()
+  original_get_bool = p.get_bool.side_effect
+  p.get_bool.side_effect = lambda key: True if key == "RivianPilotFeatureLogging" else original_get_bool(key)
+  event = mocker.patch("openpilot.sunnypilot.rivianpilot.lane_position_controller.cloudlog.event",
+                       side_effect=RuntimeError("logger unavailable"))
+  mocker.patch("openpilot.sunnypilot.rivianpilot.lane_position_controller.cloudlog.error")
+  feature = LanePositionController(p)
+
+  establish_curve(feature)
+
+  assert event.call_count > 1
+  assert feature.log_failure_count == event.call_count
+  assert feature.feature_logging
+  assert not feature.faulted
+  assert feature.last_output < 0.0
 
 
 def test_diagnostic_failure_does_not_disable_lane_position(mocker):
