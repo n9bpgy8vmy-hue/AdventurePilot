@@ -24,6 +24,7 @@ NUDGE_TORQUE_THRESHOLD = 1.0
 PARAM_REFRESH_SECONDS = 1.0
 UPDATE_PERIOD_SECONDS = 0.1
 SAMPLE_LOG_PERIOD_SECONDS = 0.5
+LOG_ERROR_REPORT_PERIOD_SECONDS = 60.0
 CURVE_RELEASE_RATIO = 0.8
 CURVE_REFERENCE_SAMPLES = 3
 CURVE_CLEARANCE_FILTER_SAMPLES = 5
@@ -81,6 +82,8 @@ class LanePositionController:
     self.automatic_output = 0.0
     self.faulted = False
     self.error_logged = False
+    self.log_failure_count = 0
+    self.last_log_error_at = None
     self.diagnostic_faulted = False
     self.diagnostic_error_logged = False
     self.get_params()
@@ -109,10 +112,24 @@ class LanePositionController:
   def _log(self, action: str, **kwargs) -> None:
     if not self.feature_logging:
       return
+    # Optional diagnostic values are represented by a missing key. Keeping
+    # unsupported values out of the structured record prevents a diagnostic
+    # serialization problem from affecting future records.
+    fields = {key: value for key, value in kwargs.items() if value is not None}
+    fields["log_failure_count"] = self.log_failure_count
     try:
-      cloudlog.event("rivianpilot lane position", action=action, **kwargs)
-    except Exception:
-      self.feature_logging = False
+      cloudlog.event("rivianpilot lane position", action=action, **fields)
+    except Exception as e:
+      # Logging is observational and must never alter lane-position state or
+      # permanently disable itself after one malformed/dropped record.
+      self.log_failure_count += 1
+      now = time.monotonic()
+      if self.last_log_error_at is None or now - self.last_log_error_at >= LOG_ERROR_REPORT_PERIOD_SECONDS:
+        self.last_log_error_at = now
+        try:
+          cloudlog.error(f"rivianpilot lane position logging failure: {type(e).__name__}")
+        except Exception:
+          pass
 
   def _publish(self, offset_m: float) -> None:
     # Go Live always includes observation. Do not require both toggles or run a
