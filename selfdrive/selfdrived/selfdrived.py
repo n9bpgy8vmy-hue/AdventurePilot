@@ -27,7 +27,7 @@ from openpilot.system.hardware import HARDWARE
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
 from openpilot.sunnypilot.rivianpilot.lane_position_controller import LanePositionController
 from openpilot.sunnypilot.rivianpilot.manual_turn_recorder import ManualTurnRecorder
-from openpilot.sunnypilot.rivianpilot.vision_bsm import get_fresh_vision_bsm_state, get_matching_vision_bsm_side, get_vision_bsm_block
+from openpilot.sunnypilot.rivianpilot.vision_bsm import get_fresh_vision_bsm_state, get_matching_vision_bsm_side, get_vision_bsm_block, memory_params
 from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
@@ -59,7 +59,7 @@ IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 class SelfdriveD(CruiseHelper):
   def __init__(self, CP=None, CP_SP=None):
     self.params = Params()
-    self.params_memory = Params(memory=True)
+    self.params_memory = memory_params()
 
     # Ensure the current branch is cached, otherwise the first cycle lags
     build_metadata = get_build_metadata()

@@ -9,10 +9,9 @@ from dataclasses import dataclass
 
 import pyray as rl
 
-from openpilot.common.params import Params
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.mici.onroad.alert_renderer import IconSide, TURN_SIGNAL_BLINK_PERIOD
-from openpilot.sunnypilot.rivianpilot.vision_bsm import get_fresh_vision_bsm_state
+from openpilot.sunnypilot.rivianpilot.vision_bsm import get_fresh_vision_bsm_state, memory_params
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -76,7 +75,7 @@ class TurnSignalWidget(Widget):
 
 class TurnSignalController:
   def __init__(self):
-    self._params_memory = Params(memory=True)
+    self._params_memory = memory_params()
     self._config = TurnSignalConfig()
     self._left_signal = TurnSignalWidget(direction=IconSide.left)
     self._right_signal = TurnSignalWidget(direction=IconSide.right)

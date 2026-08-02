@@ -15,6 +15,9 @@ from functools import lru_cache
 from pathlib import Path
 import time
 
+# This import installs the tracked OpenCV vendor directory before cv2 is loaded.
+from openpilot.sunnypilot.rivianpilot.vision_bsm_inference import VisionBSMInference
+
 import cv2
 import numpy as np
 
@@ -25,7 +28,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import Ratekeeper, set_core_affinity
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import PC
-from openpilot.sunnypilot.rivianpilot.vision_bsm_inference import VisionBSMInference
+from openpilot.sunnypilot.rivianpilot.vision_bsm import memory_params
 
 
 BASE_INTERVAL = 0.500
@@ -64,7 +67,7 @@ class VisionBSMDaemon:
     from msgq.visionipc import VisionIpcClient, VisionStreamType
 
     self.params = Params()
-    self.params_memory = Params(memory=True)
+    self.params_memory = memory_params()
     self.sm = messaging.SubMaster(["deviceState", "carState"])
     self.VisionIpcClient = VisionIpcClient
     self.stream_type = VisionStreamType.VISION_STREAM_DRIVER

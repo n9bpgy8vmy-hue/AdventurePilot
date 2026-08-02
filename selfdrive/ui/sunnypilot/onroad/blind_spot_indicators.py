@@ -9,13 +9,12 @@ import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.filter_simple import FirstOrderFilter
-from openpilot.common.params import Params
-from openpilot.sunnypilot.rivianpilot.vision_bsm import get_fresh_vision_bsm_state
+from openpilot.sunnypilot.rivianpilot.vision_bsm import get_fresh_vision_bsm_state, memory_params
 
 
 class BlindSpotIndicators:
   def __init__(self):
-    self._params_memory = Params(memory=True)
+    self._params_memory = memory_params()
     self._txt_blind_spot_left: rl.Texture = gui_app.texture('icons_mici/onroad/blind_spot_left.png', 108, 128)
     self._txt_blind_spot_right: rl.Texture = gui_app.texture('icons_mici/onroad/blind_spot_left.png', 108, 128, flip_x=True)
 

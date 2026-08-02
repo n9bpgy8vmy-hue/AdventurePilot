@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import platform
 import time
 
 from cereal import log
@@ -8,6 +9,11 @@ from cereal import log
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeMode
+
+
+def memory_params() -> Params:
+  """Return the in-memory Params store supported by this AdventurePilot base."""
+  return Params("/dev/shm/params") if platform.system() != "Darwin" else Params()
 
 
 VBSM_STATE_TIMEOUT_SECONDS = 3.0
@@ -92,7 +98,7 @@ class VisionBSMLaneChangeGuard:
 
   def __init__(self, params: Params | None = None, params_memory: Params | None = None):
     self.params = params or Params()
-    self.params_memory = params_memory or Params(memory=True)
+    self.params_memory = params_memory or memory_params()
     self.enabled = False
     self.logging_enabled = False
     self._param_counter = 0
