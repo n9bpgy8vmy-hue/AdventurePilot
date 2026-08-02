@@ -136,10 +136,11 @@ jobs:
           cd "${BUILD_DIR}"
           PYTHONPATH="${BUILD_DIR}" /usr/local/venv/bin/python -c \
             'from openpilot.sunnypilot.rivianpilot.vision_bsmd import VisionBSMDaemon; from openpilot.sunnypilot.rivianpilot.vision_bsm import memory_params; import cv2; print("bundled cv2", cv2.__version__); print("memory params", memory_params())'
-          # Construct the real UI singleton and read every field used by the
-          # Mici settings visibility callbacks before the first params refresh.
+          # The runner account cannot connect to the live deviceState msgq
+          # socket, so isolate SunnylinkState while constructing the SP UI
+          # state and verify the Mici callback field exists before refresh.
           PYTHONPATH="${BUILD_DIR}" /usr/local/venv/bin/python -c \
-            'from openpilot.selfdrive.ui.ui_state import ui_state; print("ui always_offroad", ui_state.always_offroad)'
+            'from unittest.mock import patch; from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP; p = patch("openpilot.selfdrive.ui.sunnypilot.ui_state.SunnylinkState"); p.start(); state = UIStateSP(); p.stop(); print("ui always_offroad", state.always_offroad)'
 
       - name: Test active RivianPilot features
         run: |
