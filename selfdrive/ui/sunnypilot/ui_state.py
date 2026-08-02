@@ -38,6 +38,9 @@ class UIStateSP:
     self.sunnylink_state = SunnylinkState()
 
     self.active_bundle = None
+    # Mici settings visibility callbacks can run before the first periodic
+    # update_params(). Keep the field valid from the first rendered frame.
+    self.always_offroad: bool = self.params.get_bool("OffroadMode")
     self.blindspot: bool = False
     self.chevron_metrics = None
     self.custom_interactive_timeout: int = 0
