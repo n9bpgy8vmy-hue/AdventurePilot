@@ -164,7 +164,7 @@ class VisionBSMLaneChangeGuard:
     self._blocked_side = side
     try:
       self.params_memory.put("RivianPilotVisionBSMBlockedSide", side)
-      self.params_memory.put("RivianPilotVisionBSMBlockedAt", str(now))
+      self.params_memory.put("RivianPilotVisionBSMBlockedAt", float(now))
     except Exception as exc:
       self._log_error("block_publish_failure", exc)
     self._log("lane_change_cancelled", side=side, request_source=request_source,
@@ -177,7 +177,7 @@ class VisionBSMLaneChangeGuard:
     self._blocked_side = ""
     try:
       self.params_memory.put("RivianPilotVisionBSMBlockedSide", "")
-      self.params_memory.put("RivianPilotVisionBSMBlockedAt", "0")
+      self.params_memory.put("RivianPilotVisionBSMBlockedAt", 0.0)
     except Exception as exc:
       self._log_error("block_clear_failure", exc)
 

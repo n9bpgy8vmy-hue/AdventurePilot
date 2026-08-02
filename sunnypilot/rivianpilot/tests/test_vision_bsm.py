@@ -3,6 +3,7 @@ from cereal import log
 from openpilot.sunnypilot.rivianpilot.vision_bsm import (
   VBSM_BLOCK_TIMEOUT_SECONDS,
   VBSM_STATE_TIMEOUT_SECONDS,
+  VisionBSMState,
   VisionBSMLaneChangeGuard,
   get_fresh_vision_bsm_state,
   get_matching_vision_bsm_side,
@@ -29,6 +30,23 @@ class FakeParams:
     self.values[key] = value
 
 
+class StrictRuntimeParams(FakeParams):
+  TYPES = {
+    "RivianPilotVisionBSMLastUpdateMonoTime": float,
+    "RivianPilotVisionBSMLeftActive": bool,
+    "RivianPilotVisionBSMRightActive": bool,
+    "RivianPilotVisionBSMLeftConfidence": float,
+    "RivianPilotVisionBSMRightConfidence": float,
+    "RivianPilotVisionBSMBlockedAt": float,
+  }
+
+  def put(self, key, value):
+    expected = self.TYPES.get(key)
+    if expected is not None:
+      assert isinstance(value, expected), (key, value, expected)
+    super().put(key, value)
+
+
 def test_daemon_reads_typed_float_params_without_get_float_api():
   params = FakeParams({
     "RivianPilotVisionBSMEnabled": True,
@@ -43,6 +61,20 @@ def test_daemon_reads_typed_float_params_without_get_float_api():
   daemon._cache_params()
   assert daemon._confidence_threshold == 0.75
   assert daemon._smooth_seconds == 0.3
+
+
+def test_daemon_and_guard_publish_typed_runtime_params():
+  memory = StrictRuntimeParams()
+  daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
+  daemon.params_memory = memory
+  daemon._last_update_at = 0.0
+  daemon._last_published = None
+  daemon._last_active = (False, False)
+  daemon._publish(False, False, 0.0, 0.0, updated_at=0.0, force=True)
+
+  guard = make_guard(memory)
+  guard._publish_block(LaneChangeDirection.left, "test", VisionBSMState(left=True, fresh=True), now=100.0)
+  guard.clear_block("test")
 
 
 def detector_state(now=100.0, left=False, right=False):

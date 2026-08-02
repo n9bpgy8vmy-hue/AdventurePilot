@@ -203,14 +203,14 @@ class VisionBSMDaemon:
     vehicle_left_conf, vehicle_right_conf = right_confidence, left_confidence
     values = (vehicle_left, vehicle_right, round(vehicle_left_conf, 3), round(vehicle_right_conf, 3))
     self._last_update_at = updated_at
-    self.params_memory.put("RivianPilotVisionBSMLastUpdateMonoTime", str(updated_at))
+    self.params_memory.put("RivianPilotVisionBSMLastUpdateMonoTime", float(updated_at))
     if not force and values == self._last_published:
       return
     self._last_published = values
-    self.params_memory.put("RivianPilotVisionBSMLeftActive", "1" if vehicle_left else "0")
-    self.params_memory.put("RivianPilotVisionBSMRightActive", "1" if vehicle_right else "0")
-    self.params_memory.put("RivianPilotVisionBSMLeftConfidence", str(vehicle_left_conf))
-    self.params_memory.put("RivianPilotVisionBSMRightConfidence", str(vehicle_right_conf))
+    self.params_memory.put("RivianPilotVisionBSMLeftActive", bool(vehicle_left))
+    self.params_memory.put("RivianPilotVisionBSMRightActive", bool(vehicle_right))
+    self.params_memory.put("RivianPilotVisionBSMLeftConfidence", float(vehicle_left_conf))
+    self.params_memory.put("RivianPilotVisionBSMRightConfidence", float(vehicle_right_conf))
 
     active = (vehicle_left, vehicle_right)
     if active != self._last_active:

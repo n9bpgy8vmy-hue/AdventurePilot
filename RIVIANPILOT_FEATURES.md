@@ -69,6 +69,8 @@ Phase 1 behavior:
 
 Status: experimental, default off. Based on the hardened OpenCV integration following StarPilot PR #75. Vehicle-camera polygon calibration and parked validation are required before road evaluation.
 
+`2026.007.017` fixes typed runtime parameter publication for detector state, confidence, timestamps, and lane-change blocks. The actual Rivian R1 driver-camera polygon is retained as both a persistent device parameter and a source-controlled recovery asset.
+
 ## Removed or retired
 
 - Lane-hugging observer
