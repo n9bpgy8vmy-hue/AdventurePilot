@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from openpilot.system.manager.process_config import run_rivian_vision_bsm_observer
+from openpilot.system.manager.process_config import camerad_required, run_rivian_vision_bsm_observer
 
 
 class FakeParams:
@@ -12,6 +12,7 @@ class FakeParams:
     return {
       "RivianPilotVisionBSMEnabled": self.enabled,
       "RivianPilotVisionBSMBenchMode": self.bench,
+      "IsDriverViewEnabled": False,
     }[key]
 
 
@@ -27,3 +28,11 @@ def test_detector_process_is_started_or_bench_and_opt_in_only():
   assert not run_rivian_vision_bsm_observer(False, FakeParams(True), rivian)
   assert not run_rivian_vision_bsm_observer(True, FakeParams(False), rivian)
   assert not run_rivian_vision_bsm_observer(False, FakeParams(False, bench=True), unknown)
+
+
+def test_bench_mode_starts_camera_without_starting_driver_preview():
+  unknown = SimpleNamespace(brand="")
+
+  assert camerad_required(False, FakeParams(True, bench=True), unknown)
+  assert not camerad_required(False, FakeParams(True), unknown)
+  assert not camerad_required(False, FakeParams(False, bench=True), unknown)

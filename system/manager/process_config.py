@@ -18,6 +18,12 @@ WEBCAM = os.getenv("USE_WEBCAM") is not None
 def driverview(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started or params.get_bool("IsDriverViewEnabled")
 
+def camerad_required(started: bool, params: Params, CP: car.CarParams) -> bool:
+  # Bench mode needs only camerad's driver stream. Do not start the full driver
+  # preview stack (dmonitoringmodeld/soundd) solely for an observer benchmark.
+  return driverview(started, params, CP) or (
+    params.get_bool("RivianPilotVisionBSMEnabled") and params.get_bool("RivianPilotVisionBSMBenchMode"))
+
 def notcar(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and CP.notCar
 
@@ -120,8 +126,8 @@ procs = [
   NativeProcess("stream_encoderd", "system/loggerd", ["./encoderd", "--stream"], notcar),
   PythonProcess("logmessaged", "system.logmessaged", always_run),
 
-  NativeProcess("camerad", "system/camerad", ["./camerad"], driverview, enabled=not WEBCAM),
-  PythonProcess("webcamerad", "tools.webcam.camerad", driverview, enabled=WEBCAM),
+  NativeProcess("camerad", "system/camerad", ["./camerad"], camerad_required, enabled=not WEBCAM),
+  PythonProcess("webcamerad", "tools.webcam.camerad", camerad_required, enabled=WEBCAM),
   PythonProcess("proclogd", "system.proclogd", only_onroad, enabled=platform.system() != "Darwin"),
   PythonProcess("journald", "system.journald", only_onroad, platform.system() != "Darwin"),
   PythonProcess("micd", "system.micd", iscar),

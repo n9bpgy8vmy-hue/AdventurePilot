@@ -46,3 +46,21 @@ def test_brief_cpu_spike_recovers_without_cooldown():
   assert not daemon._cpu_guard_tripped([95.0] * 8, 100.0)
   assert not daemon._cpu_guard_tripped([20.0] * 8, 100.5)
   assert daemon._cpu_overload_since == 0.0
+
+
+def test_affinity_failure_is_attempted_once_and_does_not_disable_observer(monkeypatch):
+  daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
+  daemon._affinity_attempted = False
+  daemon._affinity_set = False
+  errors = []
+  daemon._log_error = lambda reason, exc, **context: errors.append(reason)
+  monkeypatch.setattr("openpilot.sunnypilot.rivianpilot.vision_bsmd.PC", False)
+  monkeypatch.setattr("openpilot.sunnypilot.rivianpilot.vision_bsmd.set_core_affinity",
+                      lambda cores: (_ for _ in ()).throw(OSError("unavailable")))
+
+  daemon._set_affinity_once()
+  daemon._set_affinity_once()
+
+  assert daemon._affinity_attempted
+  assert not daemon._affinity_set
+  assert errors == ["affinity_unavailable"]

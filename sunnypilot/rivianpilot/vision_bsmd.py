@@ -101,6 +101,7 @@ class VisionBSMDaemon:
     self._last_active = (False, False)
     self._requested_side = ""
     self._affinity_set = False
+    self._affinity_attempted = False
     self._slow_inferences = 0
     self._cooldown_until = 0.0
     self._cooldown_count = 0
@@ -173,6 +174,17 @@ class VisionBSMDaemon:
     if not self.client.is_connected():
       self.client.connect(True)
     return self.client.is_connected()
+
+  def _set_affinity_once(self) -> None:
+    if PC or self._affinity_attempted:
+      return
+    self._affinity_attempted = True
+    try:
+      set_core_affinity(AFFINITY_CORES)
+      self._affinity_set = True
+    except Exception as exc:
+      # Affinity is an optimization, never a requirement for observation.
+      self._log_error("affinity_unavailable", exc, cores=AFFINITY_CORES)
 
   def _cpu_usage(self) -> list[float]:
     if not self.sm.valid.get("deviceState", False):
@@ -339,9 +351,7 @@ class VisionBSMDaemon:
         now = time.monotonic()
         self._maybe_refresh_params(now)
         self.sm.update(0)
-        if not PC and not self._affinity_set:
-          set_core_affinity(AFFINITY_CORES)
-          self._affinity_set = True
+        self._set_affinity_once()
 
         onroad = self.sm["deviceState"].started if self.sm.valid.get("deviceState", False) else False
         active_context = onroad or self._bench_mode
