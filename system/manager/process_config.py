@@ -66,8 +66,8 @@ def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
 
 def run_rivian_vision_bsm_observer(started: bool, params: Params, CP: car.CarParams) -> bool:
   # The daemon remains isolated and publishes observation state only. Bench mode
-  # permits parked resource testing while the driver-camera stream is available.
-  return CP.brand == "rivian" and params.get_bool("RivianPilotVisionBSMEnabled") and (
+  # permits parked resource testing before live carParams is populated.
+  return params.get_bool("RivianPilotVisionBSMEnabled") and (
     started or params.get_bool("RivianPilotVisionBSMBenchMode"))
 
 def use_github_runner(started, params, CP: car.CarParams) -> bool:
