@@ -24,7 +24,7 @@ dependencies = [
   "Cython",
   "setuptools",
   "numpy >=2.0",
-  "opencv-python-headless",  # RivianPilot Vision-BSM inference
+  "opencv-python-headless==4.11.0.86",  # StarPilot V-ASM-compatible observer runtime
 
   # vendored native dependencies
   "bzip2 @ git+https://github.com/commaai/dependencies.git@release-bzip2#subdirectory=bzip2",

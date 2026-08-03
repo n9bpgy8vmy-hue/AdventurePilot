@@ -64,6 +64,12 @@ def only_onroad(started: bool, params: Params, CP: car.CarParams) -> bool:
 def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
   return not started
 
+def run_rivian_vision_bsm_observer(started: bool, params: Params, CP: car.CarParams) -> bool:
+  # The daemon remains isolated and publishes observation state only. Bench mode
+  # permits parked resource testing while the driver-camera stream is available.
+  return CP.brand == "rivian" and params.get_bool("RivianPilotVisionBSMEnabled") and (
+    started or params.get_bool("RivianPilotVisionBSMBenchMode"))
+
 def use_github_runner(started, params, CP: car.CarParams) -> bool:
   return not PC and params.get_bool("EnableGithubRunner") and (
     not params.get_bool("NetworkMetered") and not params.get_bool("GithubRunnerSufficientVoltage"))
@@ -154,6 +160,7 @@ procs = [
   PythonProcess("uploader", "system.loggerd.uploader", uploader_ready),
   PythonProcess("statsd", "system.statsd", always_run),
   PythonProcess("feedbackd", "selfdrive.ui.feedback.feedbackd", only_onroad),
+  PythonProcess("rivian_vision_bsmd", "sunnypilot.rivianpilot.vision_bsmd", run_rivian_vision_bsm_observer),
 
   # debug procs
   NativeProcess("bridge", "cereal/messaging", ["./bridge"], notcar),

@@ -47,6 +47,12 @@ Provide a supplemental, model-based visual/audio collision warning without braki
 
 Status: backlog. Observe-only validation must precede alerts.
 
+## Feature 7 — Vision Blind-Spot Observer
+
+Run the exact StarPilot V-ASM model against configurable driver-camera window regions and publish diagnostic observation state only.
+
+Status: experimental in `2026.007.020`. The observer uses StarPilot's OpenCV 4.11 runtime, 2 Hz base/5 Hz follow-up schedule, newest-frame-only processing, one-thread inference, CPU affinity, and filtered load throttling. RivianPilot additionally enters a timed cooldown after repeated inference over 250 ms or any inference over 500 ms. It has no alert, lane-change, steering, MADS, or vehicle-control integration. Stable `2026.007.019` remains the rollback release.
+
 `2026.007.019` removes the manual-turn recorder, its stored-package controls, and the location-specific path-replay concept. It also removes the experimental Vision-BSM daemon, model, bundled OpenCV runtime, lane-change guard, alerts, and Sunnylink settings after on-device testing showed unacceptable resource contention. Native lane-change and blind-spot behavior is restored. The complete Vision-BSM experiment remains archived in branch `archive/vision-bsm-experiment-2026.007.018` for offline research.
 
 ## Removed or retired
@@ -59,7 +65,7 @@ Status: backlog. Observe-only validation must precede alerts.
 - Steering Smoothness Slider
 - Startup Welcome/Welcome Name
 - Manual-turn recording and location-specific path replay
-- Vision-BSM camera inference and lane-change guard
+- Vision-BSM lane-change guard and driving integration
 
 ## Diagnostics policy
 

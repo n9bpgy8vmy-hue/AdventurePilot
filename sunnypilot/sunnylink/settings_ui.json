@@ -242,6 +242,24 @@
                       "equals": "rivian"
                     }
                   ]
+                },
+                {
+                  "key": "RivianPilotVisionBSMEnabled",
+                  "widget": "toggle",
+                  "title": "Vision Blind-Spot Observer",
+                  "description": "Experimental observation only. Runs the StarPilot-compatible driver-camera detector without alerts, lane-change blocking, steering changes, or vehicle-control changes.",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    }
+                  ]
                 }
               ]
             }

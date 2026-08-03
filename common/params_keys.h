@@ -266,6 +266,11 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     // Rivian
     {"RivianPilotFeatureLogging", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"RivianPilotVisionBSMEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"RivianPilotVisionBSMBenchMode", {PERSISTENT, BOOL, "0"}},
+    {"RivianPilotVisionBSMConfidenceThreshold", {PERSISTENT | BACKUP, FLOAT, "0.85"}},
+    {"RivianPilotVisionBSMSmoothSeconds", {PERSISTENT | BACKUP, FLOAT, "0.2"}},
+    {"RivianPilotVisionBSMAnnotationConfig", {PERSISTENT | BACKUP, STRING, ""}},
     {"RivianPilotLanePositionObserve", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPilotLanePositionGoLive", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPilotCurveOffset", {PERSISTENT | BACKUP, BOOL, "1"}},

@@ -117,6 +117,18 @@ jobs:
           scons -j4 cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal
           touch ${BUILD_DIR}/prebuilt
 
+      - name: Vendor StarPilot-compatible observer runtime
+        run: |
+          uv pip install \
+            --target "${BUILD_DIR}/third_party/vision_bsm_python" \
+            --python /usr/local/venv/bin/python \
+            --no-deps \
+            "opencv-python-headless==4.11.0.86"
+          test -d "${BUILD_DIR}/third_party/vision_bsm_python/cv2"
+          cd "${BUILD_DIR}"
+          PYTHONPATH="${BUILD_DIR}" /usr/local/venv/bin/python -c \
+            'from openpilot.sunnypilot.rivianpilot.vision_bsm_inference import VisionBSMInference; import cv2; assert cv2.__version__ == "4.11.0"; assert VisionBSMInference().load()'
+
       - name: Test active RivianPilot features
         run: |
           cd $BUILD_DIR
@@ -125,6 +137,9 @@ jobs:
               sunnypilot/mads/tests/test_rivian_mads_resume.py \
               sunnypilot/rivianpilot/tests/test_post_turn_resume.py \
               sunnypilot/rivianpilot/tests/test_lane_position_controller.py \
+              sunnypilot/rivianpilot/tests/test_vision_bsm_inference.py \
+              sunnypilot/rivianpilot/tests/test_vision_bsmd_resource_guard.py \
+              system/manager/test/test_rivian_vision_bsm_process.py \
               sunnypilot/modeld_v2/tests/test_camera_offset_helper.py
 
       - name: Validate RivianPilot Sunnylink settings
@@ -180,6 +195,12 @@ jobs:
             exit 1
           fi
           echo "OK: no LFS pointer stubs or oversized files in output."
+
+      - name: Guard - observer runtime is packaged
+        run: |
+          test -d "${OUTPUT_DIR}/third_party/vision_bsm_python/cv2"
+          find "${OUTPUT_DIR}/third_party/vision_bsm_python/cv2" \
+            -maxdepth 1 -type f -name 'cv2*.so' -print -quit | grep -q .
 
       - name: Tar files
         run: |

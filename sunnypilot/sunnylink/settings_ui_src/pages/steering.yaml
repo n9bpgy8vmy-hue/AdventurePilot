@@ -92,6 +92,16 @@ sections:
       - type: capability
         field: brand
         equals: rivian
+    - key: RivianPilotVisionBSMEnabled
+      widget: toggle
+      title: Vision Blind-Spot Observer
+      description: Experimental observation only. Runs the StarPilot-compatible driver-camera detector without alerts, lane-change blocking, steering changes, or vehicle-control changes.
+      visibility:
+      - type: capability
+        field: brand
+        equals: rivian
+      enablement:
+      - $ref: '#/macros/offroad'
 - id: rivianpilot_post_turn_resume
   title: RivianPilot Post-Turn Resume
   description: Pause MADS for a signaled low-speed manual turn, then require a stable detected lane and warn before resuming.
