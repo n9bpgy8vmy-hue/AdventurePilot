@@ -24,7 +24,7 @@ import numpy as np
 import cereal.messaging as messaging
 
 from openpilot.common.params import Params
-from openpilot.common.realtime import Ratekeeper, set_core_affinity
+from openpilot.common.realtime import Ratekeeper
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import PC
 
@@ -35,7 +35,6 @@ FOLLOWUP_WINDOW = 1.5
 PARAM_REFRESH_INTERVAL = 2.0
 STATUS_LOG_INTERVAL = 30.0
 ERROR_LOG_INTERVAL = 30.0
-AFFINITY_CORES = [0, 1, 2]
 DEFAULT_ANNOTATION_PATH = Path(__file__).resolve().parent / "assets" / "rivian_r1_driver_camera_polygons.json"
 
 LATENCY_WARN_MS = 250.0
@@ -100,8 +99,6 @@ class VisionBSMDaemon:
     self._last_update_at = None
     self._last_active = (False, False)
     self._requested_side = ""
-    self._affinity_set = False
-    self._affinity_attempted = False
     self._slow_inferences = 0
     self._cooldown_until = 0.0
     self._cooldown_count = 0
@@ -174,17 +171,6 @@ class VisionBSMDaemon:
     if not self.client.is_connected():
       self.client.connect(True)
     return self.client.is_connected()
-
-  def _set_affinity_once(self) -> None:
-    if PC or self._affinity_attempted:
-      return
-    self._affinity_attempted = True
-    try:
-      set_core_affinity(AFFINITY_CORES)
-      self._affinity_set = True
-    except Exception as exc:
-      # Affinity is an optimization, never a requirement for observation.
-      self._log_error("affinity_unavailable", exc, cores=AFFINITY_CORES)
 
   def _cpu_usage(self) -> list[float]:
     if not self.sm.valid.get("deviceState", False):
@@ -351,8 +337,6 @@ class VisionBSMDaemon:
         now = time.monotonic()
         self._maybe_refresh_params(now)
         self.sm.update(0)
-        self._set_affinity_once()
-
         onroad = self.sm["deviceState"].started if self.sm.valid.get("deviceState", False) else False
         active_context = onroad or self._bench_mode
         if (not active_context or not self._enabled or not self.inference.valid or
