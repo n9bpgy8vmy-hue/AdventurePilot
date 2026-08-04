@@ -70,6 +70,22 @@ def test_inference_requires_healthy_driving_stack_and_cpu_headroom():
   assert not daemon._resources_allow_inference(100.0)
 
 
+def test_offroad_bench_inference_does_not_require_driving_stack():
+  daemon = daemon_for_guard()
+  daemon.sm = FakeSM(healthy=False)
+  daemon._last_resource_skip_log = 0.0
+  daemon._cpu_usage = lambda: [25.0] * 8
+  assert daemon._resources_allow_inference(100.0, require_driving_stack=False)
+
+
+def test_offroad_bench_still_requires_cpu_headroom():
+  daemon = daemon_for_guard()
+  daemon.sm = FakeSM(healthy=False)
+  daemon._last_resource_skip_log = 0.0
+  daemon._cpu_usage = lambda: [95.0, 95.0, 95.0, 95.0, 10.0, 10.0, 10.0, 10.0]
+  assert not daemon._resources_allow_inference(100.0, require_driving_stack=False)
+
+
 def test_inference_skips_when_multiple_cores_are_hot():
   daemon = daemon_for_guard()
   daemon.sm = FakeSM(healthy=True)

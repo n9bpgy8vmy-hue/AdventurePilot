@@ -11,7 +11,6 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-from functools import lru_cache
 from pathlib import Path
 import time
 
@@ -61,8 +60,9 @@ ESSENTIAL_LOG_ACTIONS = {
 }
 
 
-@lru_cache(maxsize=1)
 def _online_cpu_count() -> int | None:
+  # TICI changes the online CPU set with its power state. Never cache this:
+  # a value sampled during boot can be wrong for the rest of the drive.
   try:
     spec = Path("/sys/devices/system/cpu/online").read_text(encoding="utf-8").strip()
     count = 0
@@ -218,9 +218,9 @@ class VisionBSMDaemon:
         return False
     return True
 
-  def _resources_allow_inference(self, now: float) -> bool:
+  def _resources_allow_inference(self, now: float, require_driving_stack: bool = True) -> bool:
     average, hot_cores = self._resource_snapshot()
-    healthy = self._driving_stack_healthy()
+    healthy = self._driving_stack_healthy() if require_driving_stack else True
     allowed = healthy and average < BUSY_AVG_CPU_PERCENT and hot_cores < BUSY_HOT_CORE_COUNT
     if not allowed and now - self._last_resource_skip_log >= RESOURCE_SKIP_LOG_INTERVAL:
       self._last_resource_skip_log = now
@@ -518,10 +518,13 @@ class VisionBSMDaemon:
           rk.keep_time()
           continue
 
-        if self._cpu_guard_tripped(self._cpu_usage(), now):
+        # A sustained overload disables this optional observer for the current
+        # drive. Offroad bench mode has no drive to protect, so it simply skips
+        # samples while busy and resumes after pressure subsides.
+        if onroad and self._cpu_guard_tripped(self._cpu_usage(), now):
           rk.keep_time()
           continue
-        if not self._resources_allow_inference(now):
+        if not self._resources_allow_inference(now, require_driving_stack=onroad):
           self._set_inactive(reset=True)
           rk.keep_time()
           continue
