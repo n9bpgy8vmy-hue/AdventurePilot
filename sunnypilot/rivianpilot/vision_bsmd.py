@@ -193,6 +193,7 @@ class VisionBSMDaemon:
     self._update_ready_state()
     self._log("model_ready" if self._model_ready else "model_load_failed", context=context,
               load_ms=load_ms, warmup_ms=warmup_ms, model_error=self.inference.last_error,
+              backend=self.inference.backend,
               cpu_topology=_cpu_topology())
     return self._model_ready
 
