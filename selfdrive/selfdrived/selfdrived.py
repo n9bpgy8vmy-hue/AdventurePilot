@@ -116,6 +116,7 @@ class SelfdriveD(CruiseHelper):
     self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
     self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
     self.lane_correction_alert_enabled = self.params.get_bool("RivianPilotLaneCorrectionAlert")
+    self.rivianpilot_bsm_ready_alert_shown = False
 
     car_recognized = self.CP.brand != 'mock'
 
@@ -363,6 +364,17 @@ class SelfdriveD(CruiseHelper):
             self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadLeft)
           elif direction == "right":
             self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadRight)
+      except (TypeError, ValueError):
+        pass
+
+    if self.CP.brand == "rivian" and not self.rivianpilot_bsm_ready_alert_shown:
+      try:
+        ready_heartbeat = float(self.params_memory.get("RivianPilotVisionBSMReadyHeartbeat") or 0.0)
+        ready_alive = 0.0 <= time.monotonic() - ready_heartbeat <= 2.0
+        if (self.params.get_bool("RivianPilotVisionBSMEnabled") and ready_alive and
+            self.params_memory.get_bool("RivianPilotVisionBSMReady")):
+          self.events_sp.add(EventNameSP.rivianPilotVisionBSMReady)
+          self.rivianpilot_bsm_ready_alert_shown = True
       except (TypeError, ValueError):
         pass
 

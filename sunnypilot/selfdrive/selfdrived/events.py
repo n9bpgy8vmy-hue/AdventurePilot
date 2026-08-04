@@ -301,4 +301,11 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
   EventNameSP.rivianPilotLaneCorrectionAheadRight: {
     ET.PERMANENT: rivian_lane_correction_right_alert,
   },
+  EventNameSP.rivianPilotVisionBSMReady: {
+    ET.PERMANENT: Alert(
+      "BSM Ready ! Ready to drive",
+      "",
+      AlertStatus.normal, AlertSize.small,
+      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 2.),
+  },
 }

@@ -16,7 +16,7 @@ class FakeParams:
     }[key]
 
 
-def test_detector_process_is_started_or_bench_and_opt_in_only():
+def test_detector_process_preloads_offroad_when_opted_in():
   rivian = SimpleNamespace(brand="rivian")
   other = SimpleNamespace(brand="toyota")
   unknown = SimpleNamespace(brand="")
@@ -25,7 +25,7 @@ def test_detector_process_is_started_or_bench_and_opt_in_only():
   assert run_rivian_vision_bsm_observer(False, FakeParams(True, bench=True), rivian)
   assert run_rivian_vision_bsm_observer(True, FakeParams(True), other)
   assert run_rivian_vision_bsm_observer(False, FakeParams(True, bench=True), unknown)
-  assert not run_rivian_vision_bsm_observer(False, FakeParams(True), rivian)
+  assert run_rivian_vision_bsm_observer(False, FakeParams(True), rivian)
   assert not run_rivian_vision_bsm_observer(True, FakeParams(False), rivian)
   assert not run_rivian_vision_bsm_observer(False, FakeParams(False, bench=True), unknown)
 

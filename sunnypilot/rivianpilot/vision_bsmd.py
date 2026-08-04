@@ -32,15 +32,18 @@ from openpilot.system.hardware import PC
 BASE_INTERVAL = 0.500
 FOLLOWUP_INTERVAL = 0.200
 FOLLOWUP_WINDOW = 1.5
+ONROAD_STARTUP_DELAY = 20.0
+ONROAD_FALLBACK_LOAD_DELAY = 20.0
+STOPPED_SPEED_MPS = 0.15
 PARAM_REFRESH_INTERVAL = 2.0
 STATUS_LOG_INTERVAL = 30.0
 ERROR_LOG_INTERVAL = 30.0
+RESOURCE_SKIP_LOG_INTERVAL = 10.0
 DEFAULT_ANNOTATION_PATH = Path(__file__).resolve().parent / "assets" / "rivian_r1_driver_camera_polygons.json"
 
 LATENCY_WARN_MS = 250.0
 LATENCY_TRIP_MS = 500.0
 MAX_SLOW_INFERENCES = 3
-OVERLOAD_COOLDOWN_SECONDS = 30.0
 CPU_TRIP_AVG_PERCENT = 92.0
 CPU_TRIP_HOT_CORE_COUNT = 6
 CPU_TRIP_SECONDS = 2.0
@@ -48,6 +51,14 @@ CPU_TRIP_SECONDS = 2.0
 BUSY_MAX_CPU_PERCENT = 89.0
 BUSY_AVG_CPU_PERCENT = 74.0
 BUSY_HOT_CORE_COUNT = 4
+LOAD_MAX_CPU_PERCENT = 70.0
+LOAD_HOT_CORE_COUNT = 2
+
+CRITICAL_SERVICES = ("modelV2", "liveCalibration", "driverMonitoringState", "longitudinalPlan", "livePose")
+ESSENTIAL_LOG_ACTIONS = {
+  "started", "model_ready", "model_load_failed", "ready", "not_ready",
+  "onroad_started", "offroad_started", "tripped_for_drive", "resource_skip",
+}
 
 
 @lru_cache(maxsize=1)
@@ -66,6 +77,23 @@ def _online_cpu_count() -> int | None:
     return None
 
 
+def _cpu_topology() -> dict[str, object]:
+  topology: dict[str, object] = {"online": "unknown", "frequencies_khz": {}}
+  try:
+    topology["online"] = Path("/sys/devices/system/cpu/online").read_text(encoding="utf-8").strip()
+  except OSError:
+    pass
+  frequencies = {}
+  for cpu_path in sorted(Path("/sys/devices/system/cpu").glob("cpu[0-9]*")):
+    freq_path = cpu_path / "cpufreq" / "scaling_cur_freq"
+    try:
+      frequencies[cpu_path.name] = int(freq_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+      continue
+  topology["frequencies_khz"] = frequencies
+  return topology
+
+
 class VisionBSMDaemon:
   """Low-rate PR #75 vision detector. Outputs state only; never sends vehicle controls."""
 
@@ -74,12 +102,20 @@ class VisionBSMDaemon:
 
     self.params = Params()
     self.params_memory = Params("/dev/shm/params")
-    self.sm = messaging.SubMaster(["deviceState", "carState"])
+    self.sm = messaging.SubMaster(["deviceState", "carState", *CRITICAL_SERVICES])
     self.VisionIpcClient = VisionIpcClient
     self.stream_type = VisionStreamType.VISION_STREAM_DRIVER
     self.client = None
     self.inference = VisionBSMInference()
-    self.inference.load()
+    self._model_ready = False
+    self._model_load_attempted = False
+    self._ready = None
+    self._last_ready_heartbeat = 0.0
+    self._last_resource_skip_log = 0.0
+    self._onroad_since = 0.0
+    self._last_onroad = False
+    self._tripped_for_drive = False
+    self._trip_reason = ""
 
     self.last_inference_at = 0.0
     self.last_inference_by_side = {"left": 0.0, "right": 0.0}
@@ -100,15 +136,14 @@ class VisionBSMDaemon:
     self._last_active = (False, False)
     self._requested_side = ""
     self._slow_inferences = 0
-    self._cooldown_until = 0.0
     self._cooldown_count = 0
     self._cpu_overload_since = 0.0
 
     self._cache_params()
     self._load_annotation_config()
+    self._update_ready_state()
     self._publish(False, False, 0.0, 0.0, updated_at=0.0, force=True)
-    self._log("started", model_valid=self.inference.valid, model_error=self.inference.last_error,
-              annotation_loaded=self._annotation_loaded)
+    self._log("started", model_valid=False, annotation_loaded=self._annotation_loaded, ready=False)
 
   def _cache_params(self) -> None:
     self._enabled = self.params.get_bool("RivianPilotVisionBSMEnabled")
@@ -127,7 +162,108 @@ class VisionBSMDaemon:
     self._last_param_refresh = now
     self._cache_params()
     if self._load_annotation_config():
+      self._update_ready_state()
       self._set_inactive(reset=True)
+
+  def _update_ready_state(self) -> None:
+    ready = bool(self._enabled and self._model_ready and self._annotation_loaded)
+    if ready == self._ready:
+      return
+    self._ready = ready
+    self.params_memory.put_bool("RivianPilotVisionBSMReady", ready)
+    self.params_memory.put("RivianPilotVisionBSMReadyAt", float(time.monotonic()) if ready else 0.0)
+    self._log("ready" if ready else "not_ready", annotation_loaded=self._annotation_loaded,
+              model_valid=self.inference.valid, model_error=self.inference.last_error)
+
+  def _publish_ready_heartbeat(self, now: float) -> None:
+    if not self._ready or now - self._last_ready_heartbeat < 1.0:
+      return
+    self.params_memory.put("RivianPilotVisionBSMReadyHeartbeat", float(now))
+    self._last_ready_heartbeat = now
+
+  def _load_and_warm_model(self, context: str) -> bool:
+    if self._model_load_attempted:
+      return self._model_ready
+    self._model_load_attempted = True
+    load_started = time.monotonic()
+    model_loaded = self.inference.load()
+    load_ms = (time.monotonic() - load_started) * 1000.0
+    warmup_ok, warmup_ms = self.inference.warmup() if model_loaded else (False, 0.0)
+    self._model_ready = bool(model_loaded and warmup_ok)
+    self._update_ready_state()
+    self._log("model_ready" if self._model_ready else "model_load_failed", context=context,
+              load_ms=load_ms, warmup_ms=warmup_ms, model_error=self.inference.last_error,
+              cpu_topology=_cpu_topology())
+    return self._model_ready
+
+  def _resource_snapshot(self) -> tuple[float, int]:
+    usage = self._cpu_usage()
+    if not usage:
+      return 100.0, len(CRITICAL_SERVICES)
+    average = sum(usage) / len(usage)
+    hot_cores = sum(value >= BUSY_MAX_CPU_PERCENT for value in usage)
+    return average, hot_cores
+
+  def _resources_allow_load(self) -> bool:
+    average, hot_cores = self._resource_snapshot()
+    return average < LOAD_MAX_CPU_PERCENT and hot_cores < LOAD_HOT_CORE_COUNT
+
+  def _driving_stack_healthy(self) -> bool:
+    for service in CRITICAL_SERVICES:
+      if not self.sm.valid.get(service, False):
+        return False
+      if not self.sm.alive.get(service, False):
+        return False
+      if not self.sm.freq_ok.get(service, False):
+        return False
+    return True
+
+  def _resources_allow_inference(self, now: float) -> bool:
+    average, hot_cores = self._resource_snapshot()
+    healthy = self._driving_stack_healthy()
+    allowed = healthy and average < BUSY_AVG_CPU_PERCENT and hot_cores < BUSY_HOT_CORE_COUNT
+    if not allowed and now - self._last_resource_skip_log >= RESOURCE_SKIP_LOG_INTERVAL:
+      self._last_resource_skip_log = now
+      self._log("resource_skip", driving_stack_healthy=healthy, cpu_average=average, hot_cores=hot_cores)
+    return allowed
+
+  def _trip_for_drive(self, reason: str, **context) -> None:
+    if self._tripped_for_drive:
+      return
+    self._tripped_for_drive = True
+    self._trip_reason = reason
+    self._set_inactive(reset=True)
+    self._log("tripped_for_drive", reason=reason, **context)
+
+  def _update_onroad_state(self, onroad: bool, now: float) -> None:
+    if onroad and not self._last_onroad:
+      self._onroad_since = now
+      self._tripped_for_drive = False
+      self._trip_reason = ""
+      self._log("onroad_started", model_ready=self._model_ready, cpu_topology=_cpu_topology())
+    elif not onroad and self._last_onroad:
+      self._onroad_since = 0.0
+      self._tripped_for_drive = False
+      self._trip_reason = ""
+      self._set_inactive(reset=True)
+      self._log("offroad_started")
+    self._last_onroad = onroad
+
+  def _maybe_log_status(self, now: float, onroad: bool) -> None:
+    if now - self._last_status_log < STATUS_LOG_INTERVAL:
+      return
+    cpu = self._cpu_usage()
+    self._log("status", onroad=onroad, ready=bool(self._ready), model_ready=self._model_ready,
+              tripped_for_drive=self._tripped_for_drive, trip_reason=self._trip_reason,
+              requested_camera_side=self._requested_side or "none",
+              inference_count=self._inference_count, latency_ms=self._last_latency_ms,
+              throttle_factor=self._throttle_factor,
+              cpu_average=(sum(cpu) / len(cpu) if cpu else 0.0),
+              cpu_topology=_cpu_topology(),
+              left_confidence=self.inference.confidence["left"],
+              right_confidence=self.inference.confidence["right"])
+    self._inference_count = 0
+    self._last_status_log = now
 
   def _load_annotation_config(self) -> bool:
     config = {}
@@ -217,13 +353,10 @@ class VisionBSMDaemon:
     if now - self._cpu_overload_since < CPU_TRIP_SECONDS:
       return False
 
-    self._cooldown_until = now + OVERLOAD_COOLDOWN_SECONDS
     self._cooldown_count += 1
     self._cpu_overload_since = 0.0
-    self._log("cpu_cooldown", cpu_average=average, hot_cores=hot_cores,
-              cooldown_seconds=OVERLOAD_COOLDOWN_SECONDS,
-              cooldown_count=self._cooldown_count)
-    self._set_inactive(reset=True)
+    self._trip_for_drive("cpu_pressure", cpu_average=average, hot_cores=hot_cores,
+                         overload_seconds=CPU_TRIP_SECONDS, cooldown_count=self._cooldown_count)
     return True
 
   def _record_latency(self, latency_ms: float, now: float) -> None:
@@ -236,13 +369,11 @@ class VisionBSMDaemon:
       self._slow_inferences = max(0, self._slow_inferences - 1)
 
     if self._slow_inferences >= MAX_SLOW_INFERENCES:
-      self._cooldown_until = now + OVERLOAD_COOLDOWN_SECONDS
       self._cooldown_count += 1
       self._slow_inferences = 0
-      self._log("overload_cooldown", latency_ms=latency_ms,
-                cooldown_seconds=OVERLOAD_COOLDOWN_SECONDS,
-                cooldown_count=self._cooldown_count)
-      self._set_inactive(reset=True)
+      self._trip_for_drive("inference_latency", latency_ms=latency_ms,
+                           latency_trip_ms=LATENCY_TRIP_MS,
+                           cooldown_count=self._cooldown_count)
 
   def _set_inactive(self, reset: bool = False) -> None:
     if reset:
@@ -278,7 +409,7 @@ class VisionBSMDaemon:
       self._last_active = active
 
   def _log(self, action: str, **kwargs) -> None:
-    if not getattr(self, "_logging_enabled", False) and action != "started":
+    if not getattr(self, "_logging_enabled", False) and action not in ESSENTIAL_LOG_ACTIONS:
       return
     try:
       cloudlog.event("rivianpilot vision bsm", action=action, **kwargs)
@@ -336,11 +467,35 @@ class VisionBSMDaemon:
       try:
         now = time.monotonic()
         self._maybe_refresh_params(now)
+        self._publish_ready_heartbeat(now)
         self.sm.update(0)
-        onroad = self.sm["deviceState"].started if self.sm.valid.get("deviceState", False) else False
+        device_state_valid = self.sm.valid.get("deviceState", False)
+        onroad = self.sm["deviceState"].started if device_state_valid else self._last_onroad
+        if device_state_valid:
+          self._update_onroad_state(onroad, now)
+        self._maybe_log_status(now, onroad)
+
+        # Prefer loading before ignition. If Comma receives power at ignition,
+        # wait for the driving stack to settle and require the vehicle to remain
+        # stopped before doing the one-time load and warm-up.
+        if self._enabled and not self._model_load_attempted:
+          onroad_age = now - self._onroad_since if onroad and self._onroad_since else 0.0
+          stopped = (self.sm.valid.get("carState", False) and
+                     abs(float(self.sm["carState"].vEgo)) <= STOPPED_SPEED_MPS)
+          if device_state_valid and not onroad:
+            self._load_and_warm_model("offroad")
+          elif (onroad_age >= ONROAD_FALLBACK_LOAD_DELAY and stopped and
+                self._driving_stack_healthy() and self._resources_allow_load()):
+            self._load_and_warm_model("onroad_stopped_fallback")
+
         active_context = onroad or self._bench_mode
-        if (not active_context or not self._enabled or not self.inference.valid or
-            not self._annotation_loaded or now < self._cooldown_until):
+        if (not active_context or not self._enabled or not self._ready or not self.inference.valid or
+            not self._annotation_loaded or self._tripped_for_drive):
+          self._set_inactive(reset=True)
+          rk.keep_time()
+          continue
+
+        if onroad and now - self._onroad_since < ONROAD_STARTUP_DELAY:
           self._set_inactive(reset=True)
           rk.keep_time()
           continue
@@ -364,6 +519,10 @@ class VisionBSMDaemon:
           continue
 
         if self._cpu_guard_tripped(self._cpu_usage(), now):
+          rk.keep_time()
+          continue
+        if not self._resources_allow_inference(now):
+          self._set_inactive(reset=True)
           rk.keep_time()
           continue
 
@@ -407,7 +566,7 @@ class VisionBSMDaemon:
                                             self._confidence_threshold, self._smooth_seconds, self.current_side)
         self._last_latency_ms = (time.monotonic() - inference_started) * 1000.0
         self._record_latency(self._last_latency_ms, now)
-        if now < self._cooldown_until:
+        if self._tripped_for_drive:
           rk.keep_time()
           continue
         self._inference_count += 1
@@ -419,27 +578,24 @@ class VisionBSMDaemon:
           if sides:
             side_index = sides.index(self.current_side)
             self.current_side = sides[(side_index + 1) % len(sides)]
-        if now - self._last_status_log >= STATUS_LOG_INTERVAL:
-          cpu = self._cpu_usage()
-          self._log("status", inference_count=self._inference_count, latency_ms=self._last_latency_ms,
-                    throttle_factor=self._throttle_factor,
-                    cpu_average=(sum(cpu) / len(cpu) if cpu else 0.0),
-                    left_confidence=self.inference.confidence["left"],
-                    right_confidence=self.inference.confidence["right"])
-          self._inference_count = 0
-          self._last_status_log = now
         rk.keep_time()
       except Exception as exc:
         self._log_error("loop_failure_suppressed", exc)
         self._set_inactive(reset=True)
+        if getattr(self, "_last_onroad", False):
+          self._trip_for_drive("loop_exception", error_type=type(exc).__name__, error_message=str(exc)[:240])
         time.sleep(1.0)
 
 
 def main() -> None:
   if not PC:
     try:
-      os.nice(10)
+      os.nice(15)
     except OSError:
+      pass
+    try:
+      os.sched_setscheduler(0, os.SCHED_IDLE, os.sched_param(0))
+    except (AttributeError, OSError):
       pass
   cv2.setNumThreads(1)
   VisionBSMDaemon().run()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import time
 
 
 # Prebuilt devices use comma's fixed runtime environment, which does not include
@@ -54,6 +55,22 @@ class VisionBSMInference:
       self.last_error = f"Failed to load model: {exc}"
       self._valid = False
     return self._valid
+
+  def warmup(self) -> tuple[bool, float]:
+    """Run one synthetic inference so first use on-road does no lazy setup."""
+    if not self.valid or self.net is None:
+      return False, 0.0
+    started = time.monotonic()
+    try:
+      blob = np.zeros((1, 3, MODEL_INPUT_H, MODEL_INPUT_W), dtype=np.float32)
+      self.net.setInput(blob)
+      self.net.forward()
+      self.last_error = ""
+      return True, (time.monotonic() - started) * 1000.0
+    except Exception as exc:
+      self.last_error = f"Failed to warm up model: {exc}"
+      self._valid = False
+      return False, (time.monotonic() - started) * 1000.0
 
   @property
   def valid(self) -> bool:
