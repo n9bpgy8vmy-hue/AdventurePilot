@@ -297,6 +297,43 @@ sections:
     - type: param
       key: RivianPilotCurveOffset
       equals: true
+  - key: RivianPilotCurveLanePosition
+    widget: multiple_button
+    title: Curve Lane Position
+    description: Select a left, centered, or right lane-position preference while curve correction is active. Changes apply smoothly during a drive; straight-road positioning is unchanged.
+    options:
+    - value: -1
+      label: Right Bias
+    - value: 0
+      label: Center
+    - value: 1
+      label: Left Bias
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotCurveOffset
+      equals: true
+  - key: RivianPilotCurveLanePositionInches
+    widget: option
+    title: Curve Lane Position Bias
+    description: Preferred left or right shift combined with automatic inside-curve avoidance. The final request remains bounded by the ten-inch maximum and verified lane clearance.
+    min: 1
+    max: 10
+    step: 1
+    unit: inches
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: not
+      condition:
+        type: param
+        key: RivianPilotCurveLanePosition
+        equals: 0
   - key: RivianPilotLanePositionRelaxed
     widget: toggle
     title: Allow Poorly Marked Roads

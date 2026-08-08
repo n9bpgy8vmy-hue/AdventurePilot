@@ -6,7 +6,7 @@ from opendbc.car import structs
 from openpilot.sunnypilot.rivianpilot.lane_position_controller import LanePositionController
 
 
-def params():
+def params(overrides=None):
   values = {
     "RivianPilotLanePositionObserve": True,
     "RivianPilotLanePositionGoLive": True,
@@ -16,6 +16,8 @@ def params():
     "RivianPilotNudgeOffset": True,
     "RivianPilotCurveOffsetInches": 3,
     "RivianPilotCurveThreshold": 35,
+    "RivianPilotCurveLanePosition": 0,
+    "RivianPilotCurveLanePositionInches": 3,
     "RivianPilotNudgeOffsetInches": 3,
     "RivianPilotNudgeHoldSeconds": 10,
     "RivianPilotLaneCorrectionAlert": False,
@@ -24,6 +26,7 @@ def params():
     "RivianPilotPoorRoadOffsetInches": 2,
     "CameraOffset": 0.0,
   }
+  values.update(overrides or {})
   p = MagicMock()
   p.get_bool.side_effect = lambda key: bool(values[key])
   p.get.side_effect = lambda key, **kwargs: values[key]
@@ -41,7 +44,7 @@ def car_state():
   )
 
 
-def model(probability=0.9, lane_half_width=1.8, path_y=0.0, far_lane_half_width=None,
+def model(probability=0.9, lane_half_width=1.8, path_y=0.0, far_lane_half_width=None, near_lane_center=0.0,
           predicted_lat_accel=0.0, predicted_speed=30.0):
   x = [0.0, 10.0, 20.0, 60.0]
   half_widths = [lane_half_width] * 3 + [far_lane_half_width if far_lane_half_width is not None else lane_half_width]
@@ -51,8 +54,8 @@ def model(probability=0.9, lane_half_width=1.8, path_y=0.0, far_lane_half_width=
     laneLineProbs=[0.0, probability, probability, 0.0],
     laneLines=[
       SimpleNamespace(x=x, y=[0.0] * 4),
-      SimpleNamespace(x=x, y=[-width for width in half_widths]),
-      SimpleNamespace(x=x, y=half_widths),
+      SimpleNamespace(x=x, y=[-half_widths[0] + near_lane_center] + [-width for width in half_widths[1:]]),
+      SimpleNamespace(x=x, y=[half_widths[0] + near_lane_center] + half_widths[1:]),
     ],
     position=SimpleNamespace(x=x, y=[path_y] * 4, t=times),
     orientationRate=SimpleNamespace(z=[yaw_rate] * 4),
@@ -197,16 +200,80 @@ def test_automatic_guard_uses_only_movement_side_clearance():
   p = params()
   cs = car_state()
   # Positive curvature is a left curve and requests movement driver-right.
-  # A close left/inside boundary must not cap that outward movement.
+  # A future planned path close to the left/inside boundary must not cap
+  # outward movement when near-field physical clearance is available.
   feature = LanePositionController(p)
   establish_curve(feature, cs, model(lane_half_width=1.5, path_y=-0.3))
   assert feature.last_output == -3 * 0.0254
 
-  # On the same left curve, a close right/outside boundary caps only movement
-  # toward that boundary.
+  # Future planned-path placement is diagnostic rather than a proxy for the
+  # truck's current physical position.
   feature = LanePositionController(p)
   establish_curve(feature, cs, model(lane_half_width=1.5, path_y=0.3))
-  assert -3 * 0.0254 < feature.last_output <= 0.0
+  assert feature.last_output == -3 * 0.0254
+
+
+def test_curve_lane_position_bias_combines_with_inside_avoidance():
+  # Left curve avoidance requests three inches right. A two-inch left bias
+  # leaves a one-inch right request; a two-inch right bias requests five right.
+  left_bias = LanePositionController(params({
+    "RivianPilotCurveLanePosition": 1,
+    "RivianPilotCurveLanePositionInches": 2,
+  }))
+  establish_curve(left_bias, curvature=0.002)
+  assert abs(left_bias.last_output - (-1 * 0.0254)) < 1e-9
+
+  right_bias = LanePositionController(params({
+    "RivianPilotCurveLanePosition": -1,
+    "RivianPilotCurveLanePositionInches": 2,
+  }))
+  controls = establish_curve(right_bias, curvature=0.002)
+  right_bias.update(car_state(), True, model(), controls, now=2.6)
+  assert abs(right_bias.last_output - (-5 * 0.0254)) < 1e-9
+
+
+def test_curve_lane_position_bias_does_not_change_straight_road():
+  feature = LanePositionController(params({
+    "RivianPilotCurveLanePosition": 1,
+    "RivianPilotCurveLanePositionInches": 5,
+  }))
+  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.0), now=1.0)
+  assert feature.last_output == 0.0
+
+
+def test_live_bias_direction_change_revalidates_opposite_clearance():
+  feature = LanePositionController(params())
+  cs = car_state()
+  controls = establish_curve(feature, cs, curvature=0.002)
+  assert feature.last_output < 0.0
+  assert feature.curve_reference_clearance is not None
+
+  # A five-inch left preference overcomes the three-inch right curve request.
+  # The old right-side reference cannot be reused for movement toward left.
+  feature.curve_lane_position = 1
+  feature.curve_lane_position_inches = 5
+  feature.update(cs, True, model(), controls, now=2.6)
+  assert len(feature.curve_reference_samples) == 1
+  assert feature.curve_reference_clearance is None
+  for now in (2.8, 3.0, 3.2):
+    feature.update(cs, True, model(), controls, now=now)
+  assert feature.last_output > 0.0
+
+
+def test_sharp_curve_uses_faster_bounded_ramp():
+  p = params({"RivianPilotCurveOffsetInches": 5})
+  normal = LanePositionController(p)
+  sharp = LanePositionController(p)
+  cs = car_state()
+  normal.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.0011), now=1.0)
+  sharp.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.003), now=1.0)
+  # First samples collect geometry. Once the same reference is ready, sharper
+  # curvature is allowed to approach the same bounded target more quickly.
+  for now in (1.2, 1.4, 1.6):
+    normal.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.0011), now=now)
+    sharp.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.003), now=now)
+  assert abs(sharp.last_output) > abs(normal.last_output)
+  assert abs(sharp.last_output) <= 5 * 0.0254
 
 
 def test_manual_nudge_cancels_and_suppresses_automatic_curve():
@@ -248,20 +315,20 @@ def test_curve_clearance_filter_compensates_for_its_own_offset():
   assert reference is not None
   assert feature.last_output == -3 * 0.0254
 
-  # Simulate the model path reacting by the amount of the camera transform.
-  # Adding the output back before filtering prevents self-cancellation.
+  # A future planned-path change is diagnostic and cannot falsely reduce the
+  # near-field physical-clearance reference or the approved output.
   feature.update(cs, True, model(lane_half_width=1.8, path_y=abs(feature.last_output)), controls, now=2.6)
-  assert feature.curve_reference_clearance == reference
+  assert feature.curve_reference_clearance >= reference
   assert feature.last_output == -3 * 0.0254
 
 
-def test_bad_initial_clearance_recovers_during_same_curve():
+def test_bad_initial_near_field_clearance_recovers_during_same_curve():
   p = params()
   feature = LanePositionController(p)
   cs = car_state()
   controls = SimpleNamespace(desiredCurvature=0.002)
-  # A bad initial path estimate reports no room toward driver-right.
-  blocked = model(lane_half_width=1.5, path_y=0.5)
+  # Near-field lane geometry reports no physical room toward driver-right.
+  blocked = model(lane_half_width=1.5, near_lane_center=-0.5)
   for now in (1.0, 1.2, 1.4, 1.6, 1.8):
     feature.update(cs, True, blocked, controls, now=now)
   assert feature.last_output == 0.0
