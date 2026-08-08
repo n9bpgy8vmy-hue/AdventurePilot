@@ -597,10 +597,10 @@ def main() -> None:
       os.nice(15)
     except OSError:
       pass
-    try:
-      os.sched_setscheduler(0, os.SCHED_IDLE, os.sched_param(0))
-    except (AttributeError, OSError):
-      pass
+    # Do not use SCHED_IDLE here. ONNX Runtime's worker threads were starved by
+    # camerad under that policy, turning ~52 ms on-road inference into >700 ms.
+    # nice(15), the pre-inference CPU/health gates, low inference frequency,
+    # and the latency trip still keep this optional observer subordinate.
   cv2.setNumThreads(1)
   VisionBSMDaemon().run()
 
