@@ -29,7 +29,7 @@ from openpilot.system.hardware import PC
 
 
 BASE_INTERVAL = 0.500
-FOLLOWUP_INTERVAL = 0.200
+FOLLOWUP_INTERVAL = 0.500
 FOLLOWUP_WINDOW = 1.5
 ONROAD_STARTUP_DELAY = 20.0
 DRIVING_STACK_STABLE_SECONDS = 15.0
@@ -94,6 +94,26 @@ def _cpu_topology() -> dict[str, object]:
       continue
   topology["frequencies_khz"] = frequencies
   return topology
+
+
+def _memory_snapshot() -> dict[str, float | int]:
+  snapshot: dict[str, float | int] = {"rss_mb": 0.0, "threads": 0, "memory_available_mb": 0.0}
+  try:
+    for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+      if line.startswith("VmRSS:"):
+        snapshot["rss_mb"] = round(float(line.split()[1]) / 1024.0, 1)
+      elif line.startswith("Threads:"):
+        snapshot["threads"] = int(line.split()[1])
+  except (OSError, IndexError, TypeError, ValueError):
+    pass
+  try:
+    for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+      if line.startswith("MemAvailable:"):
+        snapshot["memory_available_mb"] = round(float(line.split()[1]) / 1024.0, 1)
+        break
+  except (OSError, IndexError, TypeError, ValueError):
+    pass
+  return snapshot
 
 
 class VisionBSMDaemon:
@@ -205,15 +225,21 @@ class VisionBSMDaemon:
     if self._model_load_attempted:
       return self._model_ready
     self._model_load_attempted = True
+    resources_before = _memory_snapshot()
     load_started = time.monotonic()
     model_loaded = self.inference.load()
     load_ms = (time.monotonic() - load_started) * 1000.0
     warmup_ok, warmup_ms = self.inference.warmup() if model_loaded else (False, 0.0)
     self._model_ready = bool(model_loaded and warmup_ok)
     self._update_ready_state()
+    resources_after = _memory_snapshot()
     self._log("model_ready" if self._model_ready else "model_load_failed", context=context,
               load_ms=load_ms, warmup_ms=warmup_ms, model_error=self.inference.last_error,
               backend=self.inference.backend,
+              rss_before_mb=resources_before["rss_mb"], rss_after_mb=resources_after["rss_mb"],
+              rss_delta_mb=round(float(resources_after["rss_mb"]) - float(resources_before["rss_mb"]), 1),
+              threads_before=resources_before["threads"], threads_after=resources_after["threads"],
+              memory_available_mb=resources_after["memory_available_mb"],
               cpu_topology=_cpu_topology())
     return self._model_ready
 
@@ -305,6 +331,7 @@ class VisionBSMDaemon:
     if now - self._last_status_log < STATUS_LOG_INTERVAL:
       return
     cpu = self._cpu_usage()
+    memory = _memory_snapshot()
     self._log("status", onroad=onroad, ready=bool(self._ready), model_ready=self._model_ready,
               tripped_for_drive=self._tripped_for_drive, trip_reason=self._trip_reason,
               available=self._available,
@@ -312,6 +339,8 @@ class VisionBSMDaemon:
               inference_count=self._inference_count, latency_ms=self._last_latency_ms,
               throttle_factor=self._throttle_factor,
               cpu_average=(sum(cpu) / len(cpu) if cpu else 0.0),
+              rss_mb=memory["rss_mb"], process_threads=memory["threads"],
+              memory_available_mb=memory["memory_available_mb"],
               cpu_topology=_cpu_topology(),
               left_confidence=self.inference.confidence["left"],
               right_confidence=self.inference.confidence["right"])
@@ -662,10 +691,9 @@ def main() -> None:
       os.nice(15)
     except OSError:
       pass
-    # Do not use SCHED_IDLE here. ONNX Runtime's worker threads were starved by
-    # camerad under that policy, turning ~52 ms on-road inference into >700 ms.
-    # nice(15), the pre-inference CPU/health gates, low inference frequency,
-    # and the latency trip still keep this optional observer subordinate.
+    # Do not use SCHED_IDLE here: camerad may starve an observer completely.
+    # nice(15), single-threaded OpenCV-DNN, the pre-inference CPU/health gates,
+    # and the latency trip keep this optional observer subordinate.
   cv2.setNumThreads(1)
   VisionBSMDaemon().run()
 

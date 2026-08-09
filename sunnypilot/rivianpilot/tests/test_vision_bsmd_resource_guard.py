@@ -1,12 +1,19 @@
 from openpilot.sunnypilot.rivianpilot.vision_bsmd import (
+  BASE_INTERVAL,
   CRITICAL_SERVICES,
   CPU_TRIP_SECONDS,
   DRIVING_STACK_STABLE_SECONDS,
+  FOLLOWUP_INTERVAL,
   LATENCY_TRIP_MS,
   MAX_SLOW_INFERENCES,
   ONROAD_STARTUP_DELAY,
   VisionBSMDaemon,
 )
+
+
+def test_initial_opencv_experiment_is_capped_at_two_fps():
+  assert BASE_INTERVAL == 0.5
+  assert FOLLOWUP_INTERVAL == BASE_INTERVAL
 
 
 class FakeSM:

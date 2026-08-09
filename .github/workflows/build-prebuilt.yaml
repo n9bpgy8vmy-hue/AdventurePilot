@@ -123,16 +123,12 @@ jobs:
             --target "${BUILD_DIR}/third_party/vision_bsm_python" \
             --python /usr/local/venv/bin/python \
             --no-deps \
-            "opencv-python-headless==4.11.0.86" \
-            "onnxruntime==1.28.0" \
-            "coloredlogs==15.0.1" \
-            "flatbuffers==25.12.19" \
-            "humanfriendly==10.0"
+            "opencv-python-headless==4.11.0.86"
           test -d "${BUILD_DIR}/third_party/vision_bsm_python/cv2"
-          test -d "${BUILD_DIR}/third_party/vision_bsm_python/onnxruntime"
+          test ! -d "${BUILD_DIR}/third_party/vision_bsm_python/onnxruntime"
           cd "${BUILD_DIR}"
           PYTHONPATH="${BUILD_DIR}" /usr/local/venv/bin/python -c \
-            'from openpilot.sunnypilot.rivianpilot.vision_bsm_inference import VisionBSMInference; import cv2, onnxruntime; engine = VisionBSMInference(); assert cv2.__version__ == "4.11.0"; assert onnxruntime.__version__ == "1.28.0"; assert engine.load(); assert engine.backend == "onnxruntime"'
+            'from openpilot.sunnypilot.rivianpilot.vision_bsm_inference import VisionBSMInference; import cv2; engine = VisionBSMInference(); assert cv2.__version__ == "4.11.0"; assert engine.load(); assert engine.backend == "opencv"'
 
       - name: Test active RivianPilot features
         run: |
@@ -204,11 +200,9 @@ jobs:
       - name: Guard - observer runtime is packaged
         run: |
           test -d "${OUTPUT_DIR}/third_party/vision_bsm_python/cv2"
-          test -d "${OUTPUT_DIR}/third_party/vision_bsm_python/onnxruntime"
+          test ! -d "${OUTPUT_DIR}/third_party/vision_bsm_python/onnxruntime"
           find "${OUTPUT_DIR}/third_party/vision_bsm_python/cv2" \
             -maxdepth 1 -type f -name 'cv2*.so' -print -quit | grep -q .
-          find "${OUTPUT_DIR}/third_party/vision_bsm_python/onnxruntime" \
-            -type f -name 'onnxruntime_pybind11_state*.so' -print -quit | grep -q .
 
       - name: Tar files
         run: |

@@ -15,11 +15,6 @@ if VISION_BSM_VENDOR_DIR.is_dir():
 import cv2
 import numpy as np
 
-try:
-  import onnxruntime as ort
-except ImportError:
-  ort = None
-
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 VISION_BSM_MODEL_PATH = ASSETS_DIR / "vision_bsm_model.onnx"
@@ -36,9 +31,6 @@ class VisionBSMInference:
   def __init__(self, model_path: Path = VISION_BSM_MODEL_PATH):
     self.model_path = model_path
     self.net = None
-    self.session = None
-    self.input_name = ""
-    self.output_name = ""
     self.backend = "none"
     self._valid = False
     self.last_error = ""
@@ -55,27 +47,14 @@ class VisionBSMInference:
       self._valid = False
       return False
     try:
-      if ort is not None:
-        options = ort.SessionOptions()
-        # BSM is optional. Prefer driving-stack headroom over minimum latency.
-        options.intra_op_num_threads = 2
-        options.inter_op_num_threads = 1
-        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        options.log_severity_level = 3
-        self.session = ort.InferenceSession(str(self.model_path), sess_options=options,
-                                            providers=["CPUExecutionProvider"])
-        self.input_name = self.session.get_inputs()[0].name
-        self.output_name = self.session.get_outputs()[0].name
-        self.backend = "onnxruntime"
-      else:
-        # Source-tree developer tests may not have the prebuilt-only runtime.
-        # Production packaging requires ONNX Runtime; OpenCV is only a
-        # fail-silent compatibility fallback.
-        self.net = cv2.dnn.readNetFromONNX(str(self.model_path))
-        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-        self.backend = "opencv"
+      # Use one inference engine only. ONNX Runtime's resident worker pool was
+      # correlated with core-service communication failures before BSM ever
+      # received a frame. OpenCV-DNN keeps this optional observer on the same
+      # explicitly single-threaded runtime used for image preprocessing.
+      self.net = cv2.dnn.readNetFromONNX(str(self.model_path))
+      self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+      self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+      self.backend = "opencv"
       self._valid = True
       self.last_error = ""
     except Exception as exc:
@@ -90,9 +69,7 @@ class VisionBSMInference:
     started = time.monotonic()
     try:
       blob = np.zeros((1, 3, MODEL_INPUT_H, MODEL_INPUT_W), dtype=np.float32)
-      if self.session is not None:
-        self.session.run([self.output_name], {self.input_name: blob})
-      elif self.net is not None:
+      if self.net is not None:
         self.net.setInput(blob)
         self.net.forward()
       else:
@@ -159,7 +136,7 @@ class VisionBSMInference:
 
   def _run_inference(self, raw_image, camera_height: int, side: str) -> float:
     bbox = self.bboxes[side]
-    if bbox is None or (self.session is None and self.net is None):
+    if bbox is None or self.net is None:
       return 0.0
     x, y, w, h = bbox
     y_crop = raw_image[y:y + h, x:x + w]
@@ -171,11 +148,8 @@ class VisionBSMInference:
 
     resized = cv2.resize(crop_rgb, (MODEL_INPUT_W, MODEL_INPUT_H), interpolation=cv2.INTER_LINEAR)
     blob = np.expand_dims(np.transpose(resized.astype(np.float32) / 255.0, (2, 0, 1)), axis=0)
-    if self.session is not None:
-      predictions = np.squeeze(self.session.run([self.output_name], {self.input_name: blob})[0])
-    else:
-      self.net.setInput(blob)
-      predictions = np.squeeze(self.net.forward())
+    self.net.setInput(blob)
+    predictions = np.squeeze(self.net.forward())
     if predictions.ndim == 2:
       if predictions.shape[0] < predictions.shape[1]:
         predictions = predictions.T

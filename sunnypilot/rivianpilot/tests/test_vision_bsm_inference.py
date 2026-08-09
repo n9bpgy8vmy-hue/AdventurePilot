@@ -21,6 +21,7 @@ def test_single_side_polygon_geometry():
 def test_bundled_model_loads_and_runs_with_opencv():
   inference = VisionBSMInference(VISION_BSM_MODEL_PATH)
   assert inference.load(), inference.last_error
+  assert inference.backend == "opencv"
   ready, latency_ms = inference.warmup()
   assert ready, inference.last_error
   assert latency_ms > 0.0
