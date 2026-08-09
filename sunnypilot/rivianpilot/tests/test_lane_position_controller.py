@@ -16,8 +16,8 @@ def params(overrides=None):
     "RivianPilotNudgeOffset": True,
     "RivianPilotCurveOffsetInches": 3,
     "RivianPilotCurveThreshold": 35,
-    "RivianPilotCurveLanePosition": 0,
-    "RivianPilotCurveLanePositionInches": 3,
+    "RivianPilotLanePositionPreference": 0,
+    "RivianPilotLanePositionBiasInches": 3,
     "RivianPilotNudgeOffsetInches": 3,
     "RivianPilotNudgeHoldSeconds": 10,
     "RivianPilotLaneCorrectionAlert": False,
@@ -66,9 +66,23 @@ def model(probability=0.9, lane_half_width=1.8, path_y=0.0, far_lane_half_width=
 def establish_curve(feature, cs=None, road_model=None, curvature=0.002, start=1.0):
   cs = cs or car_state()
   road_model = road_model or model()
+  initial_path_y = float(road_model.position.y[0])
   controls = SimpleNamespace(desiredCurvature=curvature)
   for now in (start, start + 0.2, start + 0.4, start + 0.9, start + 1.4):
+    if feature.lane_position_preference:
+      road_model.position.y = [initial_path_y - feature.automatic_output] * len(road_model.position.y)
     feature.update(cs, True, road_model, controls, now=now)
+  return controls
+
+
+def establish_straight(feature, road_model=None, start=1.0):
+  cs = car_state()
+  road_model = road_model or model()
+  initial_path_y = float(road_model.position.y[0])
+  controls = SimpleNamespace(desiredCurvature=0.0)
+  for i in range(12):
+    road_model.position.y = [initial_path_y - feature.automatic_output] * len(road_model.position.y)
+    feature.update(cs, True, road_model, controls, now=start + i * 0.2)
   return controls
 
 
@@ -213,32 +227,76 @@ def test_automatic_guard_uses_only_movement_side_clearance():
   assert feature.last_output == -3 * 0.0254
 
 
-def test_curve_lane_position_bias_combines_with_inside_avoidance():
-  # Left curve avoidance requests three inches right. A two-inch left bias
-  # leaves a one-inch right request; a two-inch right bias requests five right.
+def test_curve_avoidance_has_priority_over_lane_position_bias():
+  # A left curve requires at least three inches right. A left preference may
+  # not cancel that safety request; a right preference may move farther out.
   left_bias = LanePositionController(params({
-    "RivianPilotCurveLanePosition": 1,
-    "RivianPilotCurveLanePositionInches": 2,
+    "RivianPilotLanePositionPreference": 2,
+    "RivianPilotLanePositionBiasInches": 5,
   }))
   establish_curve(left_bias, curvature=0.002)
-  assert abs(left_bias.last_output - (-1 * 0.0254)) < 1e-9
+  assert abs(left_bias.last_output - (-3 * 0.0254)) < 1e-9
 
   right_bias = LanePositionController(params({
-    "RivianPilotCurveLanePosition": -1,
-    "RivianPilotCurveLanePositionInches": 2,
+    "RivianPilotLanePositionPreference": 3,
+    "RivianPilotLanePositionBiasInches": 5,
   }))
   controls = establish_curve(right_bias, curvature=0.002)
-  right_bias.update(car_state(), True, model(), controls, now=2.6)
+  feedback_model = model(path_y=-right_bias.automatic_output)
+  for now in (2.6, 2.8, 3.0):
+    feedback_model.position.y = [-right_bias.automatic_output] * len(feedback_model.position.y)
+    right_bias.update(car_state(), True, feedback_model, controls, now=now)
   assert abs(right_bias.last_output - (-5 * 0.0254)) < 1e-9
 
 
-def test_curve_lane_position_bias_does_not_change_straight_road():
-  feature = LanePositionController(params({
-    "RivianPilotCurveLanePosition": 1,
-    "RivianPilotCurveLanePositionInches": 5,
-  }))
-  feature.update(car_state(), True, model(), SimpleNamespace(desiredCurvature=0.0), now=1.0)
+def test_default_follows_model_on_straight_road():
+  feature = LanePositionController(params({"RivianPilotLanePositionPreference": 0}))
+  establish_straight(feature, model(path_y=0.3))
   assert feature.last_output == 0.0
+
+
+def test_center_corrects_model_bias_on_straight_road():
+  feature = LanePositionController(params({
+    "RivianPilotLanePositionPreference": 1,
+    "RivianPilotLanePositionBiasInches": 6,
+  }))
+  establish_straight(feature, model(path_y=0.1))
+  assert abs(feature.last_output - 0.1) < 0.002
+
+
+def test_left_and_right_bias_apply_on_straight_road():
+  left = LanePositionController(params({
+    "RivianPilotLanePositionPreference": 2,
+    "RivianPilotLanePositionBiasInches": 3,
+  }))
+  right = LanePositionController(params({
+    "RivianPilotLanePositionPreference": 3,
+    "RivianPilotLanePositionBiasInches": 3,
+  }))
+  establish_straight(left)
+  establish_straight(right)
+  assert abs(left.last_output - 3 * 0.0254) < 1e-9
+  assert abs(right.last_output - (-3 * 0.0254)) < 1e-9
+
+
+def test_lane_preference_falls_back_when_geometry_is_untrusted():
+  feature = LanePositionController(params({
+    "RivianPilotLanePositionPreference": 2,
+    "RivianPilotLanePositionBiasInches": 5,
+  }))
+  establish_straight(feature)
+  assert feature.last_output > 0.0
+  controls = SimpleNamespace(desiredCurvature=0.0)
+  for i in range(8):
+    feature.update(car_state(), True, model(probability=0.2), controls, now=4.0 + i * 0.2)
+  assert feature.last_output == 0.0
+
+
+def test_nudge_hold_time_supports_thirty_minutes_without_changing_nudge_logic():
+  feature = LanePositionController(params({"RivianPilotNudgeHoldSeconds": 1800}))
+  assert feature.nudge_hold_seconds == 1800
+  capped = LanePositionController(params({"RivianPilotNudgeHoldSeconds": 9999}))
+  assert capped.nudge_hold_seconds == 1800
 
 
 def test_live_bias_direction_change_revalidates_opposite_clearance():
@@ -248,10 +306,11 @@ def test_live_bias_direction_change_revalidates_opposite_clearance():
   assert feature.last_output < 0.0
   assert feature.curve_reference_clearance is not None
 
-  # A five-inch left preference overcomes the three-inch right curve request.
-  # The old right-side reference cannot be reused for movement toward left.
-  feature.curve_lane_position = 1
-  feature.curve_lane_position_inches = 5
+  # Releasing the curve and selecting a left preference changes movement
+  # direction. The old right-side reference cannot be reused for movement left.
+  feature.curve_enabled = False
+  feature.lane_position_preference = 2
+  feature.lane_position_bias_inches = 5
   feature.update(cs, True, model(), controls, now=2.6)
   assert len(feature.curve_reference_samples) == 1
   assert feature.curve_reference_clearance is None

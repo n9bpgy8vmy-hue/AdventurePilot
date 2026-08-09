@@ -65,8 +65,8 @@ class LanePositionController:
     self.nudge_enabled = True
     self.curve_offset_inches = 3
     self.curve_threshold_pct = 35
-    self.curve_lane_position = 0
-    self.curve_lane_position_inches = 3
+    self.lane_position_preference = 0
+    self.lane_position_bias_inches = 3
     self.nudge_offset_inches = 3
     self.nudge_hold_seconds = 10
     self.correction_alert_enabled = False
@@ -121,10 +121,10 @@ class LanePositionController:
     self.nudge_enabled = self.params.get_bool("RivianPilotNudgeOffset")
     self.curve_offset_inches = max(1, min(10, int(self.params.get("RivianPilotCurveOffsetInches", return_default=True))))
     self.curve_threshold_pct = max(10, min(90, int(self.params.get("RivianPilotCurveThreshold", return_default=True))))
-    self.curve_lane_position = max(-1, min(1, int(self.params.get("RivianPilotCurveLanePosition", return_default=True))))
-    self.curve_lane_position_inches = max(1, min(10, int(self.params.get("RivianPilotCurveLanePositionInches", return_default=True))))
+    self.lane_position_preference = max(0, min(3, int(self.params.get("RivianPilotLanePositionPreference", return_default=True))))
+    self.lane_position_bias_inches = max(1, min(10, int(self.params.get("RivianPilotLanePositionBiasInches", return_default=True))))
     self.nudge_offset_inches = max(2, min(10, int(self.params.get("RivianPilotNudgeOffsetInches", return_default=True))))
-    self.nudge_hold_seconds = max(5, min(60, int(self.params.get("RivianPilotNudgeHoldSeconds", return_default=True))))
+    self.nudge_hold_seconds = max(5, min(1800, int(self.params.get("RivianPilotNudgeHoldSeconds", return_default=True))))
     try:
       self.correction_alert_enabled = self.params.get_bool("RivianPilotLaneCorrectionAlert")
       self.vehicle_width_inches = max(78, min(86, int(self.params.get("RivianPilotVehicleWidthInches", return_default=True))))
@@ -194,7 +194,9 @@ class LanePositionController:
       self.last_output = 0.0
       raise
 
-  def _sample_geometry(self, model, corridor_horizon_m: float = SAMPLE_DISTANCE_M) -> tuple[float, float, float, float, float, float, float, float, float, float]:
+  def _sample_geometry(self, model, corridor_horizon_m: float = SAMPLE_DISTANCE_M) -> tuple[
+    float, float, float, float, float, float, float, float, float, float, float,
+  ]:
     probs = list(model.laneLineProbs)
     lines = list(model.laneLines)
     path_x = list(model.position.x)
@@ -251,7 +253,8 @@ class LanePositionController:
     planned_right_clearance = right - path - half_vehicle_width_m - boundary_buffer_m
     vehicle_left_clearance = -near_left - half_vehicle_width_m - boundary_buffer_m
     vehicle_right_clearance = near_right - half_vehicle_width_m - boundary_buffer_m
-    return (width, path, max(0.0, planned_left_clearance), max(0.0, planned_right_clearance),
+    lane_center = (left + right) / 2.0
+    return (width, path, lane_center, max(0.0, planned_left_clearance), max(0.0, planned_right_clearance),
             max(0.0, vehicle_left_clearance), max(0.0, vehicle_right_clearance),
             float(probs[1]), float(probs[2]), width_delta, near_width)
 
@@ -446,6 +449,9 @@ class LanePositionController:
     ramp_in_mps = CURVE_RAMP_IN_MPS
     curve_avoidance_request = 0.0
     lane_position_request = 0.0
+    measured_lane_center = None
+    model_center_error = None
+    compensated_center_error = None
     reference_state = "not_needed"
     target = 0.0
     base_camera_offset = 0.0
@@ -494,17 +500,46 @@ class LanePositionController:
                   turn_direction="left" if next_curve_direction > 0 else "right",
                   configured_offset_inches=self.curve_offset_inches,
                   configured_threshold_pct=self.curve_threshold_pct,
-                  configured_lane_position=self.curve_lane_position,
-                  configured_lane_position_inches=self.curve_lane_position_inches,
+                  configured_lane_position=self.lane_position_preference,
+                  configured_lane_position_inches=self.lane_position_bias_inches,
                   base_camera_offset_m=round(base_camera_offset, 4))
-      if self.curve_active and curve_lat_accel != 0.0:
-        # Positive CameraOffset moves driver-left. Move opposite the curve:
-        # positive/left curvature requests negative/driver-right, and vice versa.
-        base_offset = self.curve_offset_inches * INCH_TO_M
-        curve_avoidance_request = -math.copysign(base_offset, curve_lat_accel)
-        lane_position_request = self.curve_lane_position * self.curve_lane_position_inches * INCH_TO_M
-        requested = max(-MAX_CUSTOM_OFFSET_M,
-                        min(MAX_CUSTOM_OFFSET_M, curve_avoidance_request + lane_position_request))
+      position_active = self.lane_position_preference != 0
+      automatic_active = position_active or (self.curve_active and curve_lat_accel != 0.0)
+      if automatic_active:
+        if self.curve_active and curve_lat_accel != 0.0:
+          # Positive CameraOffset moves driver-left. Move opposite the curve:
+          # positive/left curvature requests negative/driver-right, and vice versa.
+          base_offset = self.curve_offset_inches * INCH_TO_M
+          curve_avoidance_request = -math.copysign(base_offset, curve_lat_accel)
+
+        corridor_horizon_m = max(SAMPLE_DISTANCE_M, min(MAX_CORRIDOR_HORIZON_M,
+                                                        max(self._finite(CS.vEgo), 0.0) * PREDICTIVE_LOOKAHEAD_END_S))
+        geometry, geometry_status = self._sample_geometry_if_authoritative(model, corridor_horizon_m)
+        if geometry is not None:
+          (width, path, measured_lane_center, planned_left_clearance, planned_right_clearance,
+           vehicle_left_clearance, vehicle_right_clearance, left_prob, right_prob, width_delta, near_width) = geometry
+          model_center_error = path - measured_lane_center
+          # The model path reacts to our published transform. Add the current
+          # output back so persistent positioning converges instead of
+          # canceling itself on the next model frame.
+          compensated_center_error = model_center_error + self.automatic_output
+          bias_m = self.lane_position_bias_inches * INCH_TO_M
+          if self.lane_position_preference == 1:  # measured center
+            lane_position_request = max(-bias_m, min(bias_m, compensated_center_error))
+          elif self.lane_position_preference == 2:  # driver-left of measured center
+            lane_position_request = compensated_center_error + bias_m
+          elif self.lane_position_preference == 3:  # driver-right of measured center
+            lane_position_request = compensated_center_error - bias_m
+
+        # Curve avoidance is a one-sided minimum safety requirement. A lane
+        # preference may move farther toward the outside, but can never pull
+        # the target back toward the inside of the active curve.
+        requested = lane_position_request
+        if curve_avoidance_request > 0.0:
+          requested = max(requested, curve_avoidance_request)
+        elif curve_avoidance_request < 0.0:
+          requested = min(requested, curve_avoidance_request)
+        requested = max(-MAX_CUSTOM_OFFSET_M, min(MAX_CUSTOM_OFFSET_M, requested))
         request_direction = 1 if requested > 0.0 else -1 if requested < 0.0 else 0
         if request_direction != self.automatic_request_direction:
           previous_direction = self.automatic_request_direction
@@ -516,14 +551,9 @@ class LanePositionController:
           if previous_direction != 0:
             self._log("movement_direction_changed", episode_id=self.curve_episode_id,
                       previous_direction=previous_direction, requested_direction=request_direction,
-                      configured_lane_position=self.curve_lane_position)
-        source = "automatic_curve_referenced"
-        corridor_horizon_m = max(SAMPLE_DISTANCE_M, min(MAX_CORRIDOR_HORIZON_M,
-                                                        max(self._finite(CS.vEgo), 0.0) * PREDICTIVE_LOOKAHEAD_END_S))
-        geometry, geometry_status = self._sample_geometry_if_authoritative(model, corridor_horizon_m)
+                      configured_lane_position=self.lane_position_preference)
+        source = "automatic_curve_referenced" if self.curve_active else "lane_position_referenced"
         if geometry is not None:
-          (width, path, planned_left_clearance, planned_right_clearance,
-           vehicle_left_clearance, vehicle_right_clearance, left_prob, right_prob, width_delta, near_width) = geometry
           movement_clearance = vehicle_left_clearance if requested > 0.0 else vehicle_right_clearance
           self.curve_geometry_misses = 0
           if self.fork_hold:
@@ -563,13 +593,14 @@ class LanePositionController:
             self.fork_recovery_frames = 0
             self.curve_reference_samples = []
             self.curve_reference_clearance = None
-            source = "automatic_curve_fork_hold"
+            source = "automatic_curve_fork_hold" if self.curve_active else "lane_position_fork_hold"
 
         if not self.fork_hold and self.curve_reference_clearance is not None and self.curve_geometry_misses < CURVE_GEOMETRY_MISS_LIMIT:
           target = math.copysign(min(abs(requested), self.curve_reference_clearance), requested)
           safety_capped = abs(target) + 1e-6 < abs(requested)
           limiter_reason = "boundary_clearance" if safety_capped else "approved"
-        elif not self.fork_hold and self.relaxed_geometry and self.curve_geometry_misses >= CURVE_GEOMETRY_MISS_LIMIT:
+        elif (self.curve_active and not self.fork_hold and self.relaxed_geometry and
+              self.curve_geometry_misses >= CURVE_GEOMETRY_MISS_LIMIT):
           # Explicit opt-in for poorly marked roads. The configured request is
           # bounded again below and remains subordinate to driver steering and
           # core control.
@@ -588,9 +619,9 @@ class LanePositionController:
           safety_capped = True
           limiter_reason = "fork_hold" if self.fork_hold else "geometry_wait"
 
-        if curve_strength >= 75.0:
+        if self.curve_active and curve_strength >= 75.0:
           ramp_in_mps = SHARP_CURVE_RAMP_IN_MPS
-        elif curve_strength >= 55.0:
+        elif self.curve_active and curve_strength >= 55.0:
           ramp_in_mps = STRONG_CURVE_RAMP_IN_MPS
         rate = ramp_in_mps if abs(target) > abs(self.automatic_output) else CURVE_RAMP_OUT_MPS
         max_step = rate * update_dt
@@ -626,12 +657,13 @@ class LanePositionController:
     if now - self.last_sample_log >= SAMPLE_LOG_PERIOD_SECONDS:
       lane_fields = {}
       if geometry is not None:
-        (width, path, planned_left_clearance, planned_right_clearance,
+        (width, path, measured_lane_center, planned_left_clearance, planned_right_clearance,
          vehicle_left_clearance, vehicle_right_clearance, left_prob, right_prob, width_delta, near_width) = geometry
         lane_fields = {
           "lane_width_m": round(width, 3),
           "near_lane_width_m": round(near_width, 3),
           "path_y_m": round(path, 3),
+          "measured_lane_center_m": round(measured_lane_center, 3),
           "driver_left_clearance_m": round(vehicle_left_clearance, 3),
           "driver_right_clearance_m": round(vehicle_right_clearance, 3),
           "planned_path_left_clearance_m": round(planned_left_clearance, 3),
@@ -652,8 +684,8 @@ class LanePositionController:
                 episode_age_s=round(now - self.curve_episode_started, 2) if self.curve_episode_started else None,
                 configured_offset_inches=self.curve_offset_inches,
                 configured_threshold_pct=self.curve_threshold_pct,
-                configured_lane_position=self.curve_lane_position,
-                configured_lane_position_inches=self.curve_lane_position_inches,
+                configured_lane_position=self.lane_position_preference,
+                configured_lane_position_inches=self.lane_position_bias_inches,
                 configured_vehicle_width_inches=self.vehicle_width_inches,
                 configured_boundary_buffer_inches=self.boundary_buffer_inches,
                 configured_poor_road_offset_inches=self.poor_road_offset_inches,
@@ -661,6 +693,9 @@ class LanePositionController:
                 base_offset_m=round(base_offset, 4),
                 curve_avoidance_request_m=round(curve_avoidance_request, 4),
                 lane_position_request_m=round(lane_position_request, 4),
+                model_center_error_m=round(model_center_error, 4) if model_center_error is not None else None,
+                compensated_center_error_m=round(compensated_center_error, 4)
+                if compensated_center_error is not None else None,
                 requested_offset_m=round(requested, 4),
                 movement_clearance_m=round(movement_clearance, 4) if movement_clearance is not None else None,
                 reference_clearance_m=round(self.curve_reference_clearance, 4)

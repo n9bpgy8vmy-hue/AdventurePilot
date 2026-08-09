@@ -297,29 +297,31 @@ sections:
     - type: param
       key: RivianPilotCurveOffset
       equals: true
-  - key: RivianPilotCurveLanePosition
+  - key: RivianPilotLanePositionPreference
     widget: multiple_button
-    title: Curve Lane Position
-    description: Select a left, centered, or right lane-position preference while curve correction is active. Changes apply smoothly during a drive; straight-road positioning is unchanged.
+    title: Lane Position
+    description: Default follows the model path. Center uses trusted lane geometry; Left and Right add the selected bias on straight roads and curves. Curve avoidance remains the higher-priority constraint.
     options:
-    - value: -1
-      label: Right Bias
     - value: 0
-      label: Center
+      label: Default
     - value: 1
-      label: Left Bias
+      label: Center
+    - value: 2
+      label: Left
+    - value: 3
+      label: Right
     visibility:
     - type: capability
       field: brand
       equals: rivian
     enablement:
     - type: param
-      key: RivianPilotCurveOffset
+      key: RivianPilotLanePositionObserve
       equals: true
-  - key: RivianPilotCurveLanePositionInches
+  - key: RivianPilotLanePositionBiasInches
     widget: option
-    title: Curve Lane Position Bias
-    description: Preferred left or right shift combined with automatic inside-curve avoidance. The final request remains bounded by the ten-inch maximum and verified lane clearance.
+    title: Lane Position Bias
+    description: Left or Right distance from measured lane center. For Center, this is the maximum correction of model bias. Uses the same boundary, fork, ramp, and defensive limits as curve adjustment.
     min: 1
     max: 10
     step: 1
@@ -332,7 +334,7 @@ sections:
     - type: not
       condition:
         type: param
-        key: RivianPilotCurveLanePosition
+        key: RivianPilotLanePositionPreference
         equals: 0
   - key: RivianPilotLanePositionRelaxed
     widget: toggle
@@ -396,10 +398,27 @@ sections:
     widget: option
     title: Nudge Hold Time
     description: Maximum time to retain a nudge preference when all confidence checks remain valid.
-    min: 5
-    max: 60
-    step: 5
-    unit: seconds
+    options:
+    - value: 5
+      label: 5 seconds
+    - value: 10
+      label: 10 seconds
+    - value: 20
+      label: 20 seconds
+    - value: 30
+      label: 30 seconds
+    - value: 60
+      label: 1 minute
+    - value: 120
+      label: 2 minutes
+    - value: 300
+      label: 5 minutes
+    - value: 600
+      label: 10 minutes
+    - value: 900
+      label: 15 minutes
+    - value: 1800
+      label: 30 minutes
     visibility:
     - type: capability
       field: brand
