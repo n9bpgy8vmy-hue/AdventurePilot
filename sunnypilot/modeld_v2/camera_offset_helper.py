@@ -12,7 +12,7 @@ from openpilot.common.transformations.camera import DEVICE_CAMERAS
 
 
 class CameraOffsetHelper:
-  MAX_RIVIANPILOT_DYNAMIC_OFFSET_M = 10.0 * 0.0254
+  MAX_RIVIANPILOT_DYNAMIC_OFFSET_M = 15.0 * 0.0254
   RIVIANPILOT_HEARTBEAT_TIMEOUT_S = 1.0
 
   def __init__(self):

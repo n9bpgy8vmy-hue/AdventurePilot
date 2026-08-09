@@ -33,6 +33,8 @@ Status: Go Live has completed successful vehicle testing. `2026.007.002` preserv
 
 `2026.007.032` isolates experimental Vision-BSM from driving-critical services. The daemon is explicitly optional to selfdrived, is restricted to Comma 4's noncritical CPU cluster, may load and warm its model only while off-road, and is capped at one blinker-gated inference per second. It remains observation-only, fail-silent, disabled by default, and never publishes vehicle controls.
 
+`2026.007.033` separates measured center correction from Left/Right lane-position bias. Center correction is configurable from 1–10 inches; Left or Right adds its separately configured 1–10-inch bias, with the combined automatic request capped at 15 inches before the existing geometry, fork, boundary-clearance, and ramp limits. Curve and manual-nudge requests retain their 10-inch configuration limits. Observe-only calculations no longer compensate for an unpublished offset, and enabling Go Live always starts from zero with a fresh geometry reference.
+
 ## Feature 4 — Experimental Lane-Change-to-Turn Handover
 
 Create a natural transfer of lateral authority from native Nudge lane change, to a driver-controlled turn, and back to MADS after the new road is stable.

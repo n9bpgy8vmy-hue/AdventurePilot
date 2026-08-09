@@ -19,7 +19,8 @@ INCH_TO_M = 0.0254
 DEFAULT_R1T_WIDTH_INCHES = 82
 DEFAULT_BOUNDARY_BUFFER_INCHES = 5
 DEFAULT_POOR_ROAD_OFFSET_INCHES = 2
-MAX_CUSTOM_OFFSET_M = 10.0 * INCH_TO_M
+MAX_AUTOMATIC_OFFSET_M = 15.0 * INCH_TO_M
+MAX_MANUAL_OFFSET_M = 10.0 * INCH_TO_M
 SAMPLE_DISTANCE_M = 20.0
 MIN_LANE_PROBABILITY = 0.65
 MIN_LANE_WIDTH_M = 2.7
@@ -66,6 +67,7 @@ class LanePositionController:
     self.curve_offset_inches = 3
     self.curve_threshold_pct = 35
     self.lane_position_preference = 0
+    self.center_correction_inches = 5
     self.lane_position_bias_inches = 3
     self.nudge_offset_inches = 3
     self.nudge_hold_seconds = 10
@@ -112,26 +114,36 @@ class LanePositionController:
       raise ValueError("non-finite lane-position input")
     return value
 
-  def get_params(self) -> None:
-    self.observe = self.params.get_bool("RivianPilotLanePositionObserve")
-    self.go_live = self.params.get_bool("RivianPilotLanePositionGoLive")
-    self.feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
-    self.curve_enabled = self.params.get_bool("RivianPilotCurveOffset")
-    self.relaxed_geometry = self.params.get_bool("RivianPilotLanePositionRelaxed")
-    self.nudge_enabled = self.params.get_bool("RivianPilotNudgeOffset")
-    self.curve_offset_inches = max(1, min(10, int(self.params.get("RivianPilotCurveOffsetInches", return_default=True))))
-    self.curve_threshold_pct = max(10, min(90, int(self.params.get("RivianPilotCurveThreshold", return_default=True))))
-    self.lane_position_preference = max(0, min(3, int(self.params.get("RivianPilotLanePositionPreference", return_default=True))))
-    self.lane_position_bias_inches = max(1, min(10, int(self.params.get("RivianPilotLanePositionBiasInches", return_default=True))))
-    self.nudge_offset_inches = max(2, min(10, int(self.params.get("RivianPilotNudgeOffsetInches", return_default=True))))
-    self.nudge_hold_seconds = max(5, min(1800, int(self.params.get("RivianPilotNudgeHoldSeconds", return_default=True))))
+  def _bounded_int_param(self, key: str, default: int, minimum: int, maximum: int) -> int:
     try:
-      self.correction_alert_enabled = self.params.get_bool("RivianPilotLaneCorrectionAlert")
-      self.vehicle_width_inches = max(78, min(86, int(self.params.get("RivianPilotVehicleWidthInches", return_default=True))))
-      self.boundary_buffer_inches = max(3, min(12, int(self.params.get("RivianPilotBoundaryBufferInches", return_default=True))))
-      self.poor_road_offset_inches = max(1, min(10, int(self.params.get("RivianPilotPoorRoadOffsetInches", return_default=True))))
-    except (KeyError, TypeError, ValueError):
-      self.correction_alert_enabled = False
+      return max(minimum, min(maximum, int(self.params.get(key, return_default=True))))
+    except (KeyError, TypeError, ValueError, OverflowError):
+      return default
+
+  def _bool_param(self, key: str, default: bool) -> bool:
+    try:
+      return bool(self.params.get_bool(key))
+    except (KeyError, TypeError, ValueError, OverflowError):
+      return default
+
+  def get_params(self) -> None:
+    self.observe = self._bool_param("RivianPilotLanePositionObserve", False)
+    self.go_live = self._bool_param("RivianPilotLanePositionGoLive", False)
+    self.feature_logging = self._bool_param("RivianPilotFeatureLogging", False)
+    self.curve_enabled = self._bool_param("RivianPilotCurveOffset", True)
+    self.relaxed_geometry = self._bool_param("RivianPilotLanePositionRelaxed", False)
+    self.nudge_enabled = self._bool_param("RivianPilotNudgeOffset", True)
+    self.curve_offset_inches = self._bounded_int_param("RivianPilotCurveOffsetInches", 3, 1, 10)
+    self.curve_threshold_pct = self._bounded_int_param("RivianPilotCurveThreshold", 35, 10, 90)
+    self.lane_position_preference = self._bounded_int_param("RivianPilotLanePositionPreference", 0, 0, 3)
+    self.center_correction_inches = self._bounded_int_param("RivianPilotCenterCorrectionInches", 5, 1, 10)
+    self.lane_position_bias_inches = self._bounded_int_param("RivianPilotLanePositionBiasInches", 3, 1, 10)
+    self.nudge_offset_inches = self._bounded_int_param("RivianPilotNudgeOffsetInches", 3, 2, 10)
+    self.nudge_hold_seconds = self._bounded_int_param("RivianPilotNudgeHoldSeconds", 10, 5, 1800)
+    self.correction_alert_enabled = self._bool_param("RivianPilotLaneCorrectionAlert", False)
+    self.vehicle_width_inches = self._bounded_int_param("RivianPilotVehicleWidthInches", DEFAULT_R1T_WIDTH_INCHES, 78, 86)
+    self.boundary_buffer_inches = self._bounded_int_param("RivianPilotBoundaryBufferInches", DEFAULT_BOUNDARY_BUFFER_INCHES, 3, 12)
+    self.poor_road_offset_inches = self._bounded_int_param("RivianPilotPoorRoadOffsetInches", DEFAULT_POOR_ROAD_OFFSET_INCHES, 1, 10)
 
   def _publish_correction_alert(self, target_m: float, source: str, now: float) -> None:
     if (not self.correction_alert_enabled or not self.go_live or
@@ -178,7 +190,7 @@ class LanePositionController:
     # second copy of the feature when both are enabled.
     try:
       output = self._finite(offset_m) if self.go_live and not self.faulted else 0.0
-      if abs(output) > MAX_CUSTOM_OFFSET_M:
+      if abs(output) > MAX_AUTOMATIC_OFFSET_M:
         raise ValueError("custom offset exceeds R1T limit")
       if self.last_output is None or abs(output - self.last_output) >= 0.001:
         self.params.put("RivianPilotDynamicCameraOffset", float(round(output, 4)), block=False)
@@ -373,8 +385,13 @@ class LanePositionController:
              car_output=None, now: float | None = None) -> None:
     now = time.monotonic() if now is None else now
     if now - self.last_param_read >= PARAM_REFRESH_SECONDS:
+      previous_go_live = self.go_live
       self.get_params()
       self.last_param_read = now
+      if self.go_live and not previous_go_live:
+        # Observation may have a fully ramped simulated output. A live session
+        # must always start from zero and build a fresh geometry reference.
+        self._reset("go_live_enabled")
     if self.faulted or now - self.last_update < UPDATE_PERIOD_SECONDS:
       return
     update_dt = min(0.5, max(UPDATE_PERIOD_SECONDS, now - self.last_update)) if self.last_update > 0.0 else UPDATE_PERIOD_SECONDS
@@ -452,6 +469,7 @@ class LanePositionController:
     measured_lane_center = None
     model_center_error = None
     compensated_center_error = None
+    center_correction = 0.0
     reference_state = "not_needed"
     target = 0.0
     base_camera_offset = 0.0
@@ -463,6 +481,7 @@ class LanePositionController:
       # Manual nudge is an explicit driver request. It is never canceled,
       # delayed, or capped by model lane confidence or geometry.
       requested = self.nudge_direction * self.nudge_offset_inches * INCH_TO_M
+      requested = max(-MAX_MANUAL_OFFSET_M, min(MAX_MANUAL_OFFSET_M, requested))
       applied = requested
       source = "manual_authoritative"
       self.curve_active = False
@@ -501,6 +520,7 @@ class LanePositionController:
                   configured_offset_inches=self.curve_offset_inches,
                   configured_threshold_pct=self.curve_threshold_pct,
                   configured_lane_position=self.lane_position_preference,
+                  configured_center_correction_inches=self.center_correction_inches,
                   configured_lane_position_inches=self.lane_position_bias_inches,
                   base_camera_offset_m=round(base_camera_offset, 4))
       position_active = self.lane_position_preference != 0
@@ -522,14 +542,17 @@ class LanePositionController:
           # The model path reacts to our published transform. Add the current
           # output back so persistent positioning converges instead of
           # canceling itself on the next model frame.
-          compensated_center_error = model_center_error + self.automatic_output
+          published_feedback = self.last_output or 0.0
+          compensated_center_error = model_center_error + published_feedback
+          center_limit_m = self.center_correction_inches * INCH_TO_M
+          center_correction = max(-center_limit_m, min(center_limit_m, compensated_center_error))
           bias_m = self.lane_position_bias_inches * INCH_TO_M
           if self.lane_position_preference == 1:  # measured center
-            lane_position_request = max(-bias_m, min(bias_m, compensated_center_error))
+            lane_position_request = center_correction
           elif self.lane_position_preference == 2:  # driver-left of measured center
-            lane_position_request = compensated_center_error + bias_m
+            lane_position_request = center_correction + bias_m
           elif self.lane_position_preference == 3:  # driver-right of measured center
-            lane_position_request = compensated_center_error - bias_m
+            lane_position_request = center_correction - bias_m
 
         # Curve avoidance is a one-sided minimum safety requirement. A lane
         # preference may move farther toward the outside, but can never pull
@@ -539,7 +562,7 @@ class LanePositionController:
           requested = max(requested, curve_avoidance_request)
         elif curve_avoidance_request < 0.0:
           requested = min(requested, curve_avoidance_request)
-        requested = max(-MAX_CUSTOM_OFFSET_M, min(MAX_CUSTOM_OFFSET_M, requested))
+        requested = max(-MAX_AUTOMATIC_OFFSET_M, min(MAX_AUTOMATIC_OFFSET_M, requested))
         request_direction = 1 if requested > 0.0 else -1 if requested < 0.0 else 0
         if request_direction != self.automatic_request_direction:
           previous_direction = self.automatic_request_direction
@@ -571,8 +594,9 @@ class LanePositionController:
             vehicle_width_m = self.vehicle_width_inches * INCH_TO_M
             boundary_buffer_m = self.boundary_buffer_inches * INCH_TO_M
             total_clearance_budget = max(0.0, near_width - vehicle_width_m - 2.0 * boundary_buffer_m)
+            published_feedback = self.last_output or 0.0
             compensated_clearance = min(total_clearance_budget,
-                                        max(0.0, movement_clearance + abs(self.automatic_output)))
+                                        max(0.0, movement_clearance + abs(published_feedback)))
             self.curve_reference_samples.append(compensated_clearance)
             self.curve_reference_samples = self.curve_reference_samples[-CURVE_CLEARANCE_FILTER_SAMPLES:]
             if len(self.curve_reference_samples) >= CURVE_REFERENCE_SAMPLES:
@@ -685,6 +709,7 @@ class LanePositionController:
                 configured_offset_inches=self.curve_offset_inches,
                 configured_threshold_pct=self.curve_threshold_pct,
                 configured_lane_position=self.lane_position_preference,
+                configured_center_correction_inches=self.center_correction_inches,
                 configured_lane_position_inches=self.lane_position_bias_inches,
                 configured_vehicle_width_inches=self.vehicle_width_inches,
                 configured_boundary_buffer_inches=self.boundary_buffer_inches,
@@ -696,6 +721,7 @@ class LanePositionController:
                 model_center_error_m=round(model_center_error, 4) if model_center_error is not None else None,
                 compensated_center_error_m=round(compensated_center_error, 4)
                 if compensated_center_error is not None else None,
+                center_correction_m=round(center_correction, 4),
                 requested_offset_m=round(requested, 4),
                 movement_clearance_m=round(movement_clearance, 4) if movement_clearance is not None else None,
                 reference_clearance_m=round(self.curve_reference_clearance, 4)

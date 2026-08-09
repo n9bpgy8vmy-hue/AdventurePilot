@@ -53,8 +53,9 @@ class TestCameraOffset:
   def test_rivianpilot_dynamic_offset_watchdog(self):
     valid = self.camera_offset.valid_rivianpilot_dynamic_offset
     assert valid(0.10, 9.5, 10.0)
+    assert valid(15 * 0.0254, 9.5, 10.0)
     assert not valid(float("nan"), 9.5, 10.0)
-    assert not valid(0.30, 9.5, 10.0)
+    assert not valid(15.1 * 0.0254, 9.5, 10.0)
     assert not valid(0.10, 8.9, 10.0)
     assert not valid("invalid", 9.5, 10.0)
 

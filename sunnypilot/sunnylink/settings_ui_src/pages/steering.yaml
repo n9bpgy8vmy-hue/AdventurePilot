@@ -318,10 +318,28 @@ sections:
     - type: param
       key: RivianPilotLanePositionObserve
       equals: true
+  - key: RivianPilotCenterCorrectionInches
+    widget: option
+    title: Center Correction Limit
+    description: Maximum measured model-to-lane-center correction before adding an optional Left or Right bias.
+    min: 1
+    max: 10
+    step: 1
+    unit: inches
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: not
+      condition:
+        type: param
+        key: RivianPilotLanePositionPreference
+        equals: 0
   - key: RivianPilotLanePositionBiasInches
     widget: option
     title: Lane Position Bias
-    description: Left or Right distance from measured lane center. For Center, this is the maximum correction of model bias. Uses the same boundary, fork, ramp, and defensive limits as curve adjustment.
+    description: Additional Left or Right preference after center correction. Center plus bias may request up to 15 inches before boundary, fork, ramp, and defensive limits.
     min: 1
     max: 10
     step: 1

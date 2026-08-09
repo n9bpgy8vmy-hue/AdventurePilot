@@ -17,6 +17,7 @@ def params(overrides=None):
     "RivianPilotCurveOffsetInches": 3,
     "RivianPilotCurveThreshold": 35,
     "RivianPilotLanePositionPreference": 0,
+    "RivianPilotCenterCorrectionInches": 5,
     "RivianPilotLanePositionBiasInches": 3,
     "RivianPilotNudgeOffsetInches": 3,
     "RivianPilotNudgeHoldSeconds": 10,
@@ -258,10 +259,88 @@ def test_default_follows_model_on_straight_road():
 def test_center_corrects_model_bias_on_straight_road():
   feature = LanePositionController(params({
     "RivianPilotLanePositionPreference": 1,
-    "RivianPilotLanePositionBiasInches": 6,
+    "RivianPilotCenterCorrectionInches": 4,
   }))
+  establish_straight(feature, model(path_y=10 * 0.0254))
+  assert abs(feature.last_output - 4 * 0.0254) < 1e-9
+
+
+def test_center_correction_plus_bias_can_reach_fifteen_inches():
+  feature = LanePositionController(params({
+    "RivianPilotLanePositionPreference": 2,
+    "RivianPilotCenterCorrectionInches": 10,
+    "RivianPilotLanePositionBiasInches": 5,
+  }))
+  cs = car_state()
+  road_model = model(path_y=10 * 0.0254)
+  controls = SimpleNamespace(desiredCurvature=0.0)
+  initial_path_y = float(road_model.position.y[0])
+  for i in range(40):
+    road_model.position.y = [initial_path_y - feature.automatic_output] * len(road_model.position.y)
+    feature.update(cs, True, road_model, controls, now=1.0 + i * 0.2)
+  assert abs(feature.last_output - 15 * 0.0254) < 1e-9
+
+
+def test_combined_lane_position_request_is_capped_at_fifteen_inches():
+  feature = LanePositionController(params({
+    "RivianPilotLanePositionPreference": 2,
+    "RivianPilotCenterCorrectionInches": 10,
+    "RivianPilotLanePositionBiasInches": 10,
+  }))
+  cs = car_state()
+  road_model = model(path_y=10 * 0.0254)
+  controls = SimpleNamespace(desiredCurvature=0.0)
+  initial_path_y = float(road_model.position.y[0])
+  for i in range(40):
+    road_model.position.y = [initial_path_y - feature.automatic_output] * len(road_model.position.y)
+    feature.update(cs, True, road_model, controls, now=1.0 + i * 0.2)
+  assert abs(feature.last_output - 15 * 0.0254) < 1e-9
+
+
+def test_observe_only_does_not_compensate_for_unpublished_output():
+  p = params({
+    "RivianPilotLanePositionPreference": 1,
+    "RivianPilotCenterCorrectionInches": 10,
+  })
+  original_get_bool = p.get_bool.side_effect
+  p.get_bool.side_effect = lambda key: False if key == "RivianPilotLanePositionGoLive" else original_get_bool(key)
+  feature = LanePositionController(p)
   establish_straight(feature, model(path_y=0.1))
-  assert abs(feature.last_output - 0.1) < 0.002
+  assert feature.last_output == 0.0
+  # Observe mode may still ramp its diagnostic target, but must calculate each
+  # frame from the unchanged model path rather than feeding back unpublished output.
+  assert feature.automatic_output > 0.0
+  output_after_first_run = feature.automatic_output
+  establish_straight(feature, model(path_y=0.1), start=10.0)
+  assert feature.last_output == 0.0
+  assert feature.automatic_output >= output_after_first_run
+
+
+def test_enabling_go_live_resets_observed_ramp_before_publishing():
+  p = params({
+    "RivianPilotLanePositionPreference": 2,
+    "RivianPilotCenterCorrectionInches": 10,
+    "RivianPilotLanePositionBiasInches": 5,
+  })
+  go_live = [False]
+  original_get_bool = p.get_bool.side_effect
+  p.get_bool.side_effect = lambda key: go_live[0] if key == "RivianPilotLanePositionGoLive" else original_get_bool(key)
+  feature = LanePositionController(p)
+  establish_straight(feature, model(path_y=10 * 0.0254))
+  assert feature.automatic_output > 0.0
+  assert feature.last_output == 0.0
+
+  go_live[0] = True
+  feature.update(car_state(), True, model(path_y=10 * 0.0254), SimpleNamespace(desiredCurvature=0.0), now=4.5)
+  assert feature.last_output == 0.0
+  assert feature.curve_reference_clearance is None
+
+
+def test_malformed_numeric_param_uses_safe_default():
+  p = params({"RivianPilotCenterCorrectionInches": "invalid"})
+  feature = LanePositionController(p)
+  assert feature.center_correction_inches == 5
+  assert not feature.faulted
 
 
 def test_left_and_right_bias_apply_on_straight_road():
