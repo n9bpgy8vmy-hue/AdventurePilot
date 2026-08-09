@@ -32,6 +32,7 @@ BASE_INTERVAL = 0.500
 FOLLOWUP_INTERVAL = 0.200
 FOLLOWUP_WINDOW = 1.5
 ONROAD_STARTUP_DELAY = 20.0
+DRIVING_STACK_STABLE_SECONDS = 15.0
 ONROAD_FALLBACK_LOAD_DELAY = 20.0
 STOPPED_SPEED_MPS = 0.15
 PARAM_REFRESH_INTERVAL = 2.0
@@ -56,7 +57,8 @@ LOAD_HOT_CORE_COUNT = 2
 CRITICAL_SERVICES = ("modelV2", "liveCalibration", "driverMonitoringState", "longitudinalPlan", "livePose")
 ESSENTIAL_LOG_ACTIONS = {
   "started", "model_ready", "model_load_failed", "ready", "not_ready",
-  "onroad_started", "offroad_started", "tripped_for_drive", "resource_skip",
+  "available", "unavailable", "onroad_started", "offroad_started",
+  "tripped_for_drive", "resource_skip",
 }
 
 
@@ -110,9 +112,11 @@ class VisionBSMDaemon:
     self._model_ready = False
     self._model_load_attempted = False
     self._ready = None
+    self._available = False
     self._last_ready_heartbeat = 0.0
     self._last_resource_skip_log = 0.0
     self._onroad_since = 0.0
+    self._stack_healthy_since = 0.0
     self._last_onroad = False
     self._tripped_for_drive = False
     self._trip_reason = ""
@@ -160,9 +164,12 @@ class VisionBSMDaemon:
     if now - self._last_param_refresh < PARAM_REFRESH_INTERVAL:
       return
     self._last_param_refresh = now
+    previous_enabled = self._enabled
     self._cache_params()
-    if self._load_annotation_config():
+    config_changed = self._load_annotation_config()
+    if config_changed or previous_enabled != self._enabled:
       self._update_ready_state()
+    if config_changed:
       self._set_inactive(reset=True)
 
   def _update_ready_state(self) -> None:
@@ -170,16 +177,29 @@ class VisionBSMDaemon:
     if ready == self._ready:
       return
     self._ready = ready
-    self.params_memory.put_bool("RivianPilotVisionBSMReady", ready)
-    self.params_memory.put("RivianPilotVisionBSMReadyAt", float(time.monotonic()) if ready else 0.0)
+    self.params_memory.put_bool("RivianPilotVisionBSMModelLoaded", ready)
+    if not ready:
+      self._set_available(False)
     self._log("ready" if ready else "not_ready", annotation_loaded=self._annotation_loaded,
               model_valid=self.inference.valid, model_error=self.inference.last_error)
 
   def _publish_ready_heartbeat(self, now: float) -> None:
-    if not self._ready or now - self._last_ready_heartbeat < 1.0:
+    if not self._available or now - self._last_ready_heartbeat < 1.0:
       return
     self.params_memory.put("RivianPilotVisionBSMReadyHeartbeat", float(now))
     self._last_ready_heartbeat = now
+
+  def _set_available(self, available: bool) -> None:
+    available = bool(available and self._ready and not self._tripped_for_drive)
+    if available == self._available:
+      return
+    self._available = available
+    now = time.monotonic()
+    self.params_memory.put_bool("RivianPilotVisionBSMReady", available)
+    self.params_memory.put("RivianPilotVisionBSMReadyAt", float(now) if available else 0.0)
+    if not available:
+      self.params_memory.put("RivianPilotVisionBSMReadyHeartbeat", 0.0)
+    self._log("available" if available else "unavailable")
 
   def _load_and_warm_model(self, context: str) -> bool:
     if self._model_load_attempted:
@@ -233,6 +253,8 @@ class VisionBSMDaemon:
       return
     self._tripped_for_drive = True
     self._trip_reason = reason
+    self._set_available(False)
+    self._disconnect_camera()
     self._set_inactive(reset=True)
     self._log("tripped_for_drive", reason=reason, **context)
 
@@ -241,14 +263,43 @@ class VisionBSMDaemon:
       self._onroad_since = now
       self._tripped_for_drive = False
       self._trip_reason = ""
+      self._stack_healthy_since = 0.0
+      self._set_available(False)
+      self._disconnect_camera()
+      # A parked developer test must never cross into a driving session.
+      self._bench_mode = False
+      self.params.put_bool("RivianPilotVisionBSMBenchMode", False)
       self._log("onroad_started", model_ready=self._model_ready, cpu_topology=_cpu_topology())
     elif not onroad and self._last_onroad:
       self._onroad_since = 0.0
       self._tripped_for_drive = False
       self._trip_reason = ""
+      self._stack_healthy_since = 0.0
+      self._set_available(False)
+      self._disconnect_camera()
       self._set_inactive(reset=True)
       self._log("offroad_started")
     self._last_onroad = onroad
+
+  def _update_stack_stability(self, onroad: bool, now: float) -> bool:
+    if not onroad or not self._ready or self._tripped_for_drive:
+      self._stack_healthy_since = 0.0
+      self._set_available(False)
+      return False
+    onroad_age = now - self._onroad_since if self._onroad_since else 0.0
+    healthy = onroad_age >= ONROAD_STARTUP_DELAY and self._driving_stack_healthy()
+    if not healthy:
+      if self._available:
+        self._trip_for_drive("critical_service_regression")
+      else:
+        self._stack_healthy_since = 0.0
+        self._set_available(False)
+      return False
+    if self._stack_healthy_since <= 0.0:
+      self._stack_healthy_since = now
+    stable = now - self._stack_healthy_since >= DRIVING_STACK_STABLE_SECONDS
+    self._set_available(stable)
+    return stable
 
   def _maybe_log_status(self, now: float, onroad: bool) -> None:
     if now - self._last_status_log < STATUS_LOG_INTERVAL:
@@ -256,6 +307,7 @@ class VisionBSMDaemon:
     cpu = self._cpu_usage()
     self._log("status", onroad=onroad, ready=bool(self._ready), model_ready=self._model_ready,
               tripped_for_drive=self._tripped_for_drive, trip_reason=self._trip_reason,
+              available=self._available,
               requested_camera_side=self._requested_side or "none",
               inference_count=self._inference_count, latency_ms=self._last_latency_ms,
               throttle_factor=self._throttle_factor,
@@ -308,6 +360,11 @@ class VisionBSMDaemon:
     if not self.client.is_connected():
       self.client.connect(True)
     return self.client.is_connected()
+
+  def _disconnect_camera(self) -> None:
+    # Dropping the final Python reference releases this optional VisionIPC
+    # client. Reconnect only for an active, single-side blinker request.
+    self.client = None
 
   def _cpu_usage(self) -> list[float]:
     if not self.sm.valid.get("deviceState", False):
@@ -474,6 +531,7 @@ class VisionBSMDaemon:
         onroad = self.sm["deviceState"].started if device_state_valid else self._last_onroad
         if device_state_valid:
           self._update_onroad_state(onroad, now)
+        stack_stable = self._update_stack_stability(onroad, now)
         self._maybe_log_status(now, onroad)
 
         # Prefer loading before ignition. If Comma receives power at ignition,
@@ -496,8 +554,9 @@ class VisionBSMDaemon:
           rk.keep_time()
           continue
 
-        if onroad and now - self._onroad_since < ONROAD_STARTUP_DELAY:
+        if onroad and not stack_stable:
           self._set_inactive(reset=True)
+          self._disconnect_camera()
           rk.keep_time()
           continue
         requested_side = (self._requested_camera_side(self.sm["carState"])
@@ -512,6 +571,7 @@ class VisionBSMDaemon:
           self._log("blinker_gate", active=bool(requested_side), camera_side=requested_side or "none")
         if not requested_side:
           self._set_inactive(reset=True)
+          self._disconnect_camera()
           rk.keep_time()
           continue
         if not self._connect_camera():
@@ -527,6 +587,8 @@ class VisionBSMDaemon:
           continue
         if not self._resources_allow_inference(now, require_driving_stack=onroad):
           self._set_inactive(reset=True)
+          if onroad:
+            self._trip_for_drive("resource_or_service_guard")
           rk.keep_time()
           continue
 
@@ -570,6 +632,9 @@ class VisionBSMDaemon:
                                             self._confidence_threshold, self._smooth_seconds, self.current_side)
         self._last_latency_ms = (time.monotonic() - inference_started) * 1000.0
         self._record_latency(self._last_latency_ms, now)
+        if onroad and not self._driving_stack_healthy():
+          self._trip_for_drive("post_inference_service_regression",
+                               latency_ms=self._last_latency_ms)
         if self._tripped_for_drive:
           rk.keep_time()
           continue

@@ -267,7 +267,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     // Rivian
     {"RivianPilotFeatureLogging", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPilotVisionBSMEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
-    {"RivianPilotVisionBSMBenchMode", {PERSISTENT, BOOL, "0"}},
+    // Developer-only parked-camera test mode. Never persist it into a drive.
+    {"RivianPilotVisionBSMBenchMode", {CLEAR_ON_MANAGER_START, BOOL, "0"}},
     {"RivianPilotVisionBSMConfidenceThreshold", {PERSISTENT | BACKUP, FLOAT, "0.85"}},
     {"RivianPilotVisionBSMSmoothSeconds", {PERSISTENT | BACKUP, FLOAT, "0.2"}},
     {"RivianPilotVisionBSMAnnotationConfig", {PERSISTENT | BACKUP, STRING, ""}},
@@ -279,6 +280,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RivianPilotVisionBSMReady", {CLEAR_ON_MANAGER_START, BOOL, "0"}},
     {"RivianPilotVisionBSMReadyAt", {CLEAR_ON_MANAGER_START, FLOAT, "0.0"}},
     {"RivianPilotVisionBSMReadyHeartbeat", {CLEAR_ON_MANAGER_START, FLOAT, "0.0"}},
+    {"RivianPilotVisionBSMModelLoaded", {CLEAR_ON_MANAGER_START, BOOL, "0"}},
     {"RivianPilotLanePositionObserve", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPilotLanePositionGoLive", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPilotCurveOffset", {PERSISTENT | BACKUP, BOOL, "1"}},

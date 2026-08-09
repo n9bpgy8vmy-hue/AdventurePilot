@@ -57,9 +57,8 @@ class VisionBSMInference:
     try:
       if ort is not None:
         options = ort.SessionOptions()
-        # Three threads met the on-road latency target while leaving more CPU
-        # headroom than four threads for the driving stack.
-        options.intra_op_num_threads = 3
+        # BSM is optional. Prefer driving-stack headroom over minimum latency.
+        options.intra_op_num_threads = 2
         options.inter_op_num_threads = 1
         options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL

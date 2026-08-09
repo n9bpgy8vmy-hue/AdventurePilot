@@ -1,8 +1,10 @@
 from openpilot.sunnypilot.rivianpilot.vision_bsmd import (
   CRITICAL_SERVICES,
   CPU_TRIP_SECONDS,
+  DRIVING_STACK_STABLE_SECONDS,
   LATENCY_TRIP_MS,
   MAX_SLOW_INFERENCES,
+  ONROAD_STARTUP_DELAY,
   VisionBSMDaemon,
 )
 
@@ -22,7 +24,28 @@ def daemon_for_guard():
   daemon._tripped_for_drive = False
   daemon._trip_reason = ""
   daemon._set_inactive = lambda reset=False: None
+  daemon._set_available = lambda available: None
+  daemon._disconnect_camera = lambda: None
   daemon._log = lambda *args, **kwargs: None
+  return daemon
+
+
+def daemon_for_stability():
+  daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
+  daemon.sm = FakeSM(healthy=True)
+  daemon._ready = True
+  daemon._available = False
+  daemon._tripped_for_drive = False
+  daemon._trip_reason = ""
+  daemon._onroad_since = 100.0
+  daemon._stack_healthy_since = 0.0
+  daemon._set_inactive = lambda reset=False: None
+  daemon._disconnect_camera = lambda: None
+  daemon._log = lambda *args, **kwargs: None
+  daemon.params_memory = type("FakeParams", (), {
+    "put_bool": lambda *args, **kwargs: None,
+    "put": lambda *args, **kwargs: None,
+  })()
   return daemon
 
 
@@ -92,3 +115,30 @@ def test_inference_skips_when_multiple_cores_are_hot():
   daemon._last_resource_skip_log = 0.0
   daemon._cpu_usage = lambda: [95.0, 95.0, 95.0, 95.0, 10.0, 10.0, 10.0, 10.0]
   assert not daemon._resources_allow_inference(100.0)
+
+
+def test_stack_must_be_continuously_healthy_after_startup_delay():
+  daemon = daemon_for_stability()
+  first_eligible = 100.0 + ONROAD_STARTUP_DELAY
+  assert not daemon._update_stack_stability(True, first_eligible)
+  assert not daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS - 0.1)
+  assert daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS)
+  assert daemon._available
+
+
+def test_health_regression_after_availability_trips_for_drive():
+  daemon = daemon_for_stability()
+  first_eligible = 100.0 + ONROAD_STARTUP_DELAY
+  daemon._update_stack_stability(True, first_eligible)
+  assert daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS)
+  daemon.sm = FakeSM(healthy=False)
+  assert not daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS + 0.1)
+  assert daemon._tripped_for_drive
+  assert daemon._trip_reason == "critical_service_regression"
+
+
+def test_offroad_never_reports_bsm_available():
+  daemon = daemon_for_stability()
+  daemon._available = True
+  assert not daemon._update_stack_stability(False, 200.0)
+  assert not daemon._available
