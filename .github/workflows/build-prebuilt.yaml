@@ -123,11 +123,13 @@ jobs:
             --target "${BUILD_DIR}/third_party/vision_bsm_python" \
             --python /usr/local/venv/bin/python \
             --no-deps \
+            "numpy==2.2.6" \
             "opencv-python-headless==4.11.0.86"
           test -d "${BUILD_DIR}/third_party/vision_bsm_python/cv2"
+          test -d "${BUILD_DIR}/third_party/vision_bsm_python/numpy"
           test ! -d "${BUILD_DIR}/third_party/vision_bsm_python/onnxruntime"
           cd "${BUILD_DIR}"
-          PYTHONPATH="${BUILD_DIR}" /usr/local/venv/bin/python -c \
+          PYTHONPATH="${BUILD_DIR}/third_party/vision_bsm_python:${BUILD_DIR}" /usr/local/venv/bin/python -S -c \
             'from openpilot.sunnypilot.rivianpilot.vision_bsm_inference import VisionBSMInference; import cv2; engine = VisionBSMInference(); assert cv2.__version__ == "4.11.0"; assert engine.load(); assert engine.backend == "opencv"'
 
       - name: Test active RivianPilot features
@@ -200,6 +202,7 @@ jobs:
       - name: Guard - observer runtime is packaged
         run: |
           test -d "${OUTPUT_DIR}/third_party/vision_bsm_python/cv2"
+          test -d "${OUTPUT_DIR}/third_party/vision_bsm_python/numpy"
           test ! -d "${OUTPUT_DIR}/third_party/vision_bsm_python/onnxruntime"
           find "${OUTPUT_DIR}/third_party/vision_bsm_python/cv2" \
             -maxdepth 1 -type f -name 'cv2*.so' -print -quit | grep -q .
