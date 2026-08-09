@@ -23,18 +23,16 @@ import numpy as np
 import cereal.messaging as messaging
 
 from openpilot.common.params import Params
-from openpilot.common.realtime import Ratekeeper
+from openpilot.common.realtime import Ratekeeper, set_core_affinity
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import PC
 
 
-BASE_INTERVAL = 0.500
-FOLLOWUP_INTERVAL = 0.500
+BASE_INTERVAL = 1.000
+FOLLOWUP_INTERVAL = 1.000
 FOLLOWUP_WINDOW = 1.5
 ONROAD_STARTUP_DELAY = 20.0
 DRIVING_STACK_STABLE_SECONDS = 15.0
-ONROAD_FALLBACK_LOAD_DELAY = 20.0
-STOPPED_SPEED_MPS = 0.15
 PARAM_REFRESH_INTERVAL = 2.0
 STATUS_LOG_INTERVAL = 30.0
 ERROR_LOG_INTERVAL = 30.0
@@ -51,9 +49,6 @@ CPU_TRIP_SECONDS = 2.0
 BUSY_MAX_CPU_PERCENT = 89.0
 BUSY_AVG_CPU_PERCENT = 74.0
 BUSY_HOT_CORE_COUNT = 4
-LOAD_MAX_CPU_PERCENT = 70.0
-LOAD_HOT_CORE_COUNT = 2
-
 CRITICAL_SERVICES = ("modelV2", "liveCalibration", "driverMonitoringState", "longitudinalPlan", "livePose")
 ESSENTIAL_LOG_ACTIONS = {
   "started", "model_ready", "model_load_failed", "ready", "not_ready",
@@ -250,10 +245,6 @@ class VisionBSMDaemon:
     average = sum(usage) / len(usage)
     hot_cores = sum(value >= BUSY_MAX_CPU_PERCENT for value in usage)
     return average, hot_cores
-
-  def _resources_allow_load(self) -> bool:
-    average, hot_cores = self._resource_snapshot()
-    return average < LOAD_MAX_CPU_PERCENT and hot_cores < LOAD_HOT_CORE_COUNT
 
   def _driving_stack_healthy(self) -> bool:
     for service in CRITICAL_SERVICES:
@@ -563,18 +554,12 @@ class VisionBSMDaemon:
         stack_stable = self._update_stack_stability(onroad, now)
         self._maybe_log_status(now, onroad)
 
-        # Prefer loading before ignition. If Comma receives power at ignition,
-        # wait for the driving stack to settle and require the vehicle to remain
-        # stopped before doing the one-time load and warm-up.
+        # Loading and warm-up are intentionally off-road only. Starting the
+        # OpenCV graph competes for CPU and memory, so a device that was not
+        # prepared before ignition leaves BSM unavailable for the whole drive.
         if self._enabled and not self._model_load_attempted:
-          onroad_age = now - self._onroad_since if onroad and self._onroad_since else 0.0
-          stopped = (self.sm.valid.get("carState", False) and
-                     abs(float(self.sm["carState"].vEgo)) <= STOPPED_SPEED_MPS)
           if device_state_valid and not onroad:
             self._load_and_warm_model("offroad")
-          elif (onroad_age >= ONROAD_FALLBACK_LOAD_DELAY and stopped and
-                self._driving_stack_healthy() and self._resources_allow_load()):
-            self._load_and_warm_model("onroad_stopped_fallback")
 
         active_context = onroad or self._bench_mode
         if (not active_context or not self._enabled or not self._ready or not self.inference.valid or
@@ -691,8 +676,14 @@ def main() -> None:
       os.nice(15)
     except OSError:
       pass
+    try:
+      # Comma 4 reserves cores 4-7 for controls/planning/cameras/models. Keep
+      # this optional single-threaded observer on the noncritical cluster.
+      set_core_affinity([0, 1, 2, 3])
+    except OSError:
+      cloudlog.exception("failed to isolate RivianPilot Vision BSM CPU affinity")
     # Do not use SCHED_IDLE here: camerad may starve an observer completely.
-    # nice(15), single-threaded OpenCV-DNN, the pre-inference CPU/health gates,
+    # nice(15), CPU-cluster isolation, single-threaded OpenCV-DNN, health gates,
     # and the latency trip keep this optional observer subordinate.
   cv2.setNumThreads(1)
   VisionBSMDaemon().run()

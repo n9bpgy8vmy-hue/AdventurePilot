@@ -31,6 +31,8 @@ Status: Go Live has completed successful vehicle testing. `2026.007.002` preserv
 
 `2026.007.031` replaces curve-only lane preference with one unified Default/Center/Left/Right position. Default leaves the model path unchanged. Center corrects model bias toward trusted measured lane center; Left and Right add the configured 1–10-inch position bias on straight roads and curves. The implementation reuses the proven curve controller's geometry validation, compensated reference, fork hold, boundary clearance, ramp limiting, manual-nudge priority, logging, and fail-silent fallback. Automatic inside-curve avoidance remains a higher-priority one-sided constraint. Existing manual-nudge behavior is unchanged; its selectable hold duration now extends to 30 minutes.
 
+`2026.007.032` isolates experimental Vision-BSM from driving-critical services. The daemon is explicitly optional to selfdrived, is restricted to Comma 4's noncritical CPU cluster, may load and warm its model only while off-road, and is capped at one blinker-gated inference per second. It remains observation-only, fail-silent, disabled by default, and never publishes vehicle controls.
+
 ## Feature 4 — Experimental Lane-Change-to-Turn Handover
 
 Create a natural transfer of lateral authority from native Nudge lane change, to a driver-controlled turn, and back to MADS after the new road is stable.

@@ -154,7 +154,10 @@ class SelfdriveD(CruiseHelper):
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
-    self.ignored_processes = {'mapd', }
+    # Optional observers must never turn their own failure into a vehicle-wide
+    # processNotRunning event. Vision BSM publishes no control messages and is
+    # deliberately fail-silent; manager still reports its state for diagnostics.
+    self.ignored_processes = {'mapd', 'rivian_vision_bsmd', }
 
     # Determine startup event
     is_remote = build_metadata.openpilot.comma_remote or build_metadata.openpilot.sunnypilot_remote

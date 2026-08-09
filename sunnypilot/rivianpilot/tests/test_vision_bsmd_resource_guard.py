@@ -11,8 +11,8 @@ from openpilot.sunnypilot.rivianpilot.vision_bsmd import (
 )
 
 
-def test_initial_opencv_experiment_is_capped_at_two_fps():
-  assert BASE_INTERVAL == 0.5
+def test_opencv_observer_is_capped_at_one_fps():
+  assert BASE_INTERVAL == 1.0
   assert FOLLOWUP_INTERVAL == BASE_INTERVAL
 
 
