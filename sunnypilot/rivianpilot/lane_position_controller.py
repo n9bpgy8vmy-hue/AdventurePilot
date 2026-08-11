@@ -88,6 +88,7 @@ class LanePositionController:
     self.nudge_offset_inches = 3
     self.nudge_hold_seconds = 10
     self.nudge_timer_display = True
+    self.active_offset_display = True
     self.correction_alert_enabled = False
     self.vehicle_width_inches = DEFAULT_R1T_WIDTH_INCHES
     self.boundary_buffer_inches = DEFAULT_BOUNDARY_BUFFER_INCHES
@@ -104,6 +105,9 @@ class LanePositionController:
     self.last_nudge_timer_second = None
     self.last_nudge_timer_heartbeat = 0.0
     self.nudge_timer_cleared = False
+    self.last_active_offset_status = None
+    self.last_active_offset_heartbeat = 0.0
+    self.active_offset_status_cleared = False
     self.pending_nudge_direction = 0
     self.pending_nudge_relatched = False
     self.curve_active = False
@@ -175,6 +179,7 @@ class LanePositionController:
     self.nudge_offset_inches = self._bounded_int_param("RivianPilotNudgeOffsetInches", 3, 2, 10)
     self.nudge_hold_seconds = self._bounded_int_param("RivianPilotNudgeHoldSeconds", 10, 5, 1800)
     self.nudge_timer_display = self._bool_param("RivianPilotNudgeTimerDisplay", True)
+    self.active_offset_display = self._bool_param("RivianPilotActiveOffsetDisplay", True)
     self.correction_alert_enabled = self._bool_param("RivianPilotLaneCorrectionAlert", False)
     self.vehicle_width_inches = self._bounded_int_param("RivianPilotVehicleWidthInches", DEFAULT_R1T_WIDTH_INCHES, 78, 86)
     self.boundary_buffer_inches = self._bounded_int_param("RivianPilotBoundaryBufferInches", DEFAULT_BOUNDARY_BUFFER_INCHES, 3, 12)
@@ -268,6 +273,84 @@ class LanePositionController:
         self.last_nudge_timer_heartbeat = now
     except Exception as e:
       self._log("nudge_timer_failure_suppressed", error_type=type(e).__name__)
+
+  def _clear_active_offset_status(self) -> None:
+    if self.active_offset_status_cleared:
+      return
+    self.last_active_offset_status = None
+    self.last_active_offset_heartbeat = 0.0
+    try:
+      self.params_memory.put("RivianPilotActiveOffsetTitle", "")
+      self.params_memory.put("RivianPilotActiveOffsetDetail", "")
+      self.params_memory.put("RivianPilotActiveOffsetHeartbeat", 0.0)
+    except Exception:
+      pass
+    self.active_offset_status_cleared = True
+
+  @staticmethod
+  def _offset_source_label(source: str) -> str:
+    if source == "manual_authoritative":
+      return "Manual Nudge"
+    if source.startswith("automatic_curve"):
+      return "Curve Offset"
+    if source.startswith("lane_position"):
+      return "Lane Position"
+    return "Lane Offset"
+
+  @staticmethod
+  def _limiter_label(reason: str) -> str:
+    return {
+      "boundary_clearance": "Boundary limited",
+      "poor_road_cap": "Poor-road limit",
+      "fork_hold": "Fork detected",
+      "geometry_wait": "Lane confidence low",
+      "ramp_in": "Ramping smoothly",
+      "reversal_wait": "Direction stabilizing",
+      "reversal_zero_crossing": "Returning through center",
+    }.get(reason, "")
+
+  def _publish_active_offset_status(self, requested_m: float, applied_m: float, source: str,
+                                    limiter_reason: str, center_stability_state: str, now: float) -> None:
+    if not self.active_offset_display or not self.go_live:
+      self._clear_active_offset_status()
+      return
+    requested_inches = abs(requested_m) / INCH_TO_M
+    applied_inches = abs(applied_m) / INCH_TO_M
+    # Ignore sub-quarter-inch noise. A meaningful blocked request remains
+    # visible even when the approved output is zero.
+    if requested_inches < 0.25 and applied_inches < 0.25:
+      self._clear_active_offset_status()
+      return
+    direction_value = applied_m if applied_inches >= 0.25 else requested_m
+    direction = "Left" if direction_value > 0.0 else "Right"
+    source_label = self._offset_source_label(source)
+    if applied_inches >= 0.25:
+      title = f"{source_label} • {direction} {applied_inches:.1f} in"
+    else:
+      title = f"{source_label} • {direction} blocked"
+    effective_limiter = limiter_reason
+    if center_stability_state in ("reversal_wait", "reversal_zero_crossing"):
+      effective_limiter = center_stability_state
+    limiter = self._limiter_label(effective_limiter)
+    detail = limiter
+    if source == "manual_authoritative" and self.nudge_until > now:
+      remaining = max(1, int(math.ceil(self.nudge_until - now)))
+      detail = f"{remaining // 60}:{remaining % 60:02d} remaining" if remaining >= 60 else f"{remaining}s remaining"
+    if limiter and requested_inches >= applied_inches + 0.25:
+      detail = f"{limiter} • requested {requested_inches:.1f} in"
+    status = (title, detail)
+    try:
+      self.active_offset_status_cleared = False
+      if status != self.last_active_offset_status:
+        self.params_memory.put("RivianPilotActiveOffsetTitle", title)
+        self.params_memory.put("RivianPilotActiveOffsetDetail", detail)
+        self.last_active_offset_status = status
+      if now - self.last_active_offset_heartbeat >= 0.5:
+        self.params_memory.put("RivianPilotActiveOffsetHeartbeat", float(now))
+        self.last_active_offset_heartbeat = now
+    except Exception as e:
+      # Display telemetry is optional and cannot alter the control output.
+      self._log("active_offset_display_failure_suppressed", error_type=type(e).__name__)
 
   def _stable_center_error(self, compensated_error: float, update_dt: float) -> float:
     """Filter lane-center noise while preserving the configured hard limit."""
@@ -864,6 +947,8 @@ class LanePositionController:
         applied = self.automatic_output
 
     self._publish(applied)
+    self._publish_active_offset_status(requested, self.last_output or 0.0, source,
+                                       limiter_reason, center_stability_state, now)
     self._publish_correction_alert(target, source, now)
     diagnostics = self._safe_diagnostics(CS, model, controls, car_control, car_output) if self.feature_logging else {}
     if now - self.last_sample_log >= SAMPLE_LOG_PERIOD_SECONDS:
@@ -948,6 +1033,7 @@ class LanePositionController:
       self.params.put("RivianPilotDynamicCameraOffset", 0.0, block=False)
       self.params.put("RivianPilotDynamicCameraOffsetUpdated", 0.0, block=False)
       self.last_output = 0.0
+      self._clear_active_offset_status()
     except Exception:
       # A stale heartbeat independently forces modeld back to the core offset.
       pass

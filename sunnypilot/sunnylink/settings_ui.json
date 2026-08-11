@@ -504,6 +504,26 @@
               ]
             },
             {
+              "key": "RivianPilotActiveOffsetDisplay",
+              "widget": "toggle",
+              "title": "Show Active Offset",
+              "description": "Silently show the active source, direction, applied distance, and any boundary, fork, confidence, or smoothing limit. Safety alerts always take priority.",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotLanePositionGoLive",
+                  "equals": true
+                }
+              ]
+            },
+            {
               "key": "RivianPilotVehicleWidthInches",
               "widget": "option",
               "title": "Vehicle Body Width",

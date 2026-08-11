@@ -383,6 +383,7 @@ struct OnroadEventSP @0xda96579883444c35 {
     rivianPilotVisionBSMDetectedRightLoud @37;
     rivianPilotVisionBSMReady @38;
     rivianPilotNudgeTimer @39;
+    rivianPilotActiveOffset @40;
   }
 }
 

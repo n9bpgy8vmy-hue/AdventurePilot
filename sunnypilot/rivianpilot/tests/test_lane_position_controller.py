@@ -27,6 +27,7 @@ def params(overrides=None):
     "RivianPilotNudgeOffsetInches": 3,
     "RivianPilotNudgeHoldSeconds": 10,
     "RivianPilotNudgeTimerDisplay": True,
+    "RivianPilotActiveOffsetDisplay": True,
     "RivianPilotLaneCorrectionAlert": False,
     "RivianPilotVehicleWidthInches": 82,
     "RivianPilotBoundaryBufferInches": 5,
@@ -336,6 +337,57 @@ def test_nudge_countdown_is_published_without_chime_or_control_dependency():
   memory.put.assert_any_call("RivianPilotNudgeTimerDirection", "left")
   memory.put.assert_any_call("RivianPilotNudgeTimerRemaining", 10)
   memory.put.assert_any_call("RivianPilotNudgeTimerHeartbeat", 1.2)
+
+
+def test_active_offset_display_reports_applied_direction_and_limiter():
+  persistent = params()
+  memory = MagicMock()
+  feature = LanePositionController(persistent, memory)
+
+  feature._publish_active_offset_status(-6 * 0.0254, -3.5 * 0.0254, "automatic_curve_referenced",
+                                        "boundary_clearance", "curve_priority", 2.0)
+
+  memory.put.assert_any_call("RivianPilotActiveOffsetTitle", "Curve Offset • Right 3.5 in")
+  memory.put.assert_any_call("RivianPilotActiveOffsetDetail", "Boundary limited • requested 6.0 in")
+  memory.put.assert_any_call("RivianPilotActiveOffsetHeartbeat", 2.0)
+
+
+def test_active_offset_display_reports_blocked_geometry_without_changing_control():
+  persistent = params()
+  memory = MagicMock()
+  feature = LanePositionController(persistent, memory)
+
+  feature._publish_active_offset_status(4 * 0.0254, 0.0, "lane_position_fork_hold",
+                                        "fork_hold", "stable", 3.0)
+
+  memory.put.assert_any_call("RivianPilotActiveOffsetTitle", "Lane Position • Left blocked")
+  memory.put.assert_any_call("RivianPilotActiveOffsetDetail", "Fork detected • requested 4.0 in")
+
+
+def test_active_offset_display_failure_is_suppressed():
+  persistent = params()
+  memory = MagicMock()
+  memory.put.side_effect = RuntimeError("display unavailable")
+  feature = LanePositionController(persistent, memory)
+
+  feature._publish_active_offset_status(3 * 0.0254, 2 * 0.0254, "manual_authoritative",
+                                        "inactive", "inactive", 4.0)
+
+  assert not feature.faulted
+  assert feature.last_output == 0.0
+
+
+def test_active_offset_display_preserves_manual_nudge_countdown():
+  persistent = params()
+  memory = MagicMock()
+  feature = LanePositionController(persistent, memory)
+  feature.nudge_until = 70.0
+
+  feature._publish_active_offset_status(3 * 0.0254, 3 * 0.0254, "manual_authoritative",
+                                        "inactive", "inactive", 5.0)
+
+  memory.put.assert_any_call("RivianPilotActiveOffsetTitle", "Manual Nudge • Left 3.0 in")
+  memory.put.assert_any_call("RivianPilotActiveOffsetDetail", "1:05 remaining")
 
 
 def test_center_correction_plus_bias_can_reach_fifteen_inches():

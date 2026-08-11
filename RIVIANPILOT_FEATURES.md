@@ -16,6 +16,8 @@ Status: vehicle-tested. `2026.007.006` distinguishes light, near-straight road-c
 
 `2026.007.035` allows a zero-second post-turn resume delay. Stable-lane confirmation and every existing speed, steering, yaw, lane/road-edge, and geometry requirement remain unchanged; after they succeed, Immediate mode resumes MADS without an additional countdown, message, or chime. Delayed 1–5-second warning modes remain available.
 
+`2026.007.036` adds an optional silent active-offset display. It reports whether Curve Offset, Lane Position, or Manual Nudge is active, the actual published direction and distance, and concise reasons when a request is reduced or blocked (boundary clearance, fork detection, lane confidence, smoothing, or direction stabilization). This is display-only telemetry and does not change steering or offset calculations.
+
 ## Feature 3 — Lane Position
 
 Apply a bounded temporary model-camera offset on curves or after a deliberate steering nudge. Driver input, blinkers, inactive lateral control, invalid geometry, and unsafe boundary clearance suppress the contribution.

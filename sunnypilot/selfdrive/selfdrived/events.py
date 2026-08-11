@@ -119,6 +119,20 @@ def rivian_nudge_timer_alert(*_args) -> Alert:
     Priority.LOW, VisualAlert.none, AudibleAlert.none, .2)
 
 
+def rivian_active_offset_alert(*_args) -> Alert:
+  params = memory_params()
+  title = params.get("RivianPilotActiveOffsetTitle") or "Lane Offset Active"
+  detail = params.get("RivianPilotActiveOffsetDetail") or ""
+  if isinstance(title, bytes):
+    title = title.decode("utf-8", errors="ignore")
+  if isinstance(detail, bytes):
+    detail = detail.decode("utf-8", errors="ignore")
+  return Alert(
+    str(title), str(detail),
+    AlertStatus.normal, AlertSize.small,
+    Priority.LOW, VisualAlert.none, AudibleAlert.none, .2)
+
+
 class EventsSP(EventsBase):
   def __init__(self):
     super().__init__()
@@ -328,5 +342,8 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
   EventNameSP.rivianPilotNudgeTimer: {
     ET.PERMANENT: rivian_nudge_timer_alert,
+  },
+  EventNameSP.rivianPilotActiveOffset: {
+    ET.PERMANENT: rivian_active_offset_alert,
   },
 }
