@@ -316,7 +316,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RivianPostTurnMaxSpeed", {PERSISTENT | BACKUP, INT, "30"}},  // MPH or km/h
     {"RivianPostTurnMinResumeSpeed", {PERSISTENT | BACKUP, INT, "10"}},  // MPH or km/h
     {"RivianPostTurnStableSeconds", {PERSISTENT | BACKUP, INT, "1"}},
-    {"RivianPostTurnResumeDelay", {PERSISTENT | BACKUP, INT, "3"}},
+    {"RivianPostTurnResumeDelay", {PERSISTENT | BACKUP, INT, "0"}},
     {"RivianPostTurnRelaxedRoadEdges", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianMadsAutoResumeSpeed", {PERSISTENT | BACKUP, INT, "20"}},  // MPH or km/h
     {"RivianMadsResumeDelay", {PERSISTENT | BACKUP, INT, "3"}},  // seconds

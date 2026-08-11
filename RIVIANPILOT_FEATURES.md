@@ -14,6 +14,8 @@ Pause MADS for a qualifying signaled low-speed manual turn, then warn and resume
 
 Status: vehicle-tested. `2026.007.006` distinguishes light, near-straight road-camber corrections from deliberate steering using driver torque and steering rate. Light correction pressure no longer restarts the stability timer; strong torque, rapid steering, significant wheel angle, yaw, blinkers, speed, and lane/road-edge confidence continue to block resume. The decision is logged for road validation.
 
+`2026.007.035` allows a zero-second post-turn resume delay. Stable-lane confirmation and every existing speed, steering, yaw, lane/road-edge, and geometry requirement remain unchanged; after they succeed, Immediate mode resumes MADS without an additional countdown, message, or chime. Delayed 1–5-second warning modes remain available.
+
 ## Feature 3 — Lane Position
 
 Apply a bounded temporary model-camera offset on curves or after a deliberate steering nudge. Driver input, blinkers, inactive lateral control, invalid geometry, and unsafe boundary clearance suppress the contribution.

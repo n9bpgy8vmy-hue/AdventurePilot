@@ -385,11 +385,33 @@
               "key": "RivianPostTurnResumeDelay",
               "widget": "option",
               "title": "Post-Turn Resume Warning",
-              "description": "Chime and wait this long after stable-lane confirmation before MADS resumes.",
-              "min": 1,
-              "max": 5,
-              "step": 1,
-              "unit": "seconds",
+              "description": "Choose Immediate to resume as soon as stable-lane confirmation succeeds, without a countdown or chime. Other values retain the warning delay.",
+              "options": [
+                {
+                  "value": 0,
+                  "label": "Immediate"
+                },
+                {
+                  "value": 1,
+                  "label": "1 second"
+                },
+                {
+                  "value": 2,
+                  "label": "2 seconds"
+                },
+                {
+                  "value": 3,
+                  "label": "3 seconds"
+                },
+                {
+                  "value": 4,
+                  "label": "4 seconds"
+                },
+                {
+                  "value": 5,
+                  "label": "5 seconds"
+                }
+              ],
               "visibility": [
                 {
                   "type": "capability",

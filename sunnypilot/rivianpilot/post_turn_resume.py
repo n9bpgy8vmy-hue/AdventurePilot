@@ -91,7 +91,7 @@ class PostTurnResume:
       errors.append("resume_speed_above_turn_speed")
     if not 1 <= self.stable_seconds <= 3:
       errors.append("stable_seconds_out_of_range")
-    if not 1 <= self.resume_delay <= 5:
+    if not 0 <= self.resume_delay <= 5:
       errors.append("resume_delay_out_of_range")
     signature = tuple(errors) or None
     if signature is not None and signature != self.last_config_error:
@@ -556,6 +556,11 @@ class PostTurnResume:
       self._log("would_resume", CS, stable_seconds=self.stable_seconds)
       self.reset()
       return PostTurnAction.none, None
+
+    if self.resume_delay == 0:
+      self._log("resumed", CS, stable_seconds=required_stable_seconds, configured_delay=0,
+                resume_path="above_turn_speed" if high_speed_escape else recovery_path)
+      return PostTurnAction.resume, None
 
     if self.countdown <= 0.0:
       self.countdown = float(max(1, min(5, int(self.resume_delay))))

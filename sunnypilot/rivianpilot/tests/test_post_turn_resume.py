@@ -72,6 +72,28 @@ def test_disabled_never_arms(mocker):
   assert not feature.pending
 
 
+def test_zero_resume_delay_resumes_immediately_after_stable_confirmation(mocker):
+  params = make_params(mocker)
+  original_get = params.get.side_effect
+  params.get.side_effect = lambda key, **kwargs: 0 if key == "RivianPostTurnResumeDelay" else original_get(key, **kwargs)
+  feature = PostTurnResume(params)
+  assert feature.last_config_error is None
+  assert feature.update(car_state(left=True), model(), True, True)[0] == PostTurnAction.pause
+
+  settled = car_state(speed_mph=15)
+  warnings = []
+  for _ in range(round(feature.stable_seconds / DT_CTRL) + 3):
+    action, warning = feature.update(settled, model(), True, False)
+    warnings.append(warning)
+    if action == PostTurnAction.resume:
+      break
+  else:
+    raise AssertionError("zero-delay post-turn sequence did not resume")
+
+  assert all(warning is None for warning in warnings)
+  assert feature.countdown == 0.0
+
+
 def test_observe_only_tracks_without_control_change(mocker):
   feature = PostTurnResume(make_params(mocker, observe=True, go_live=False))
   action, warning = feature.update(car_state(left=True), model(), True, True)
