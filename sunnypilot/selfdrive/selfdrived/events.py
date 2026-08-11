@@ -101,6 +101,24 @@ def rivian_lane_correction_right_alert(*_args) -> Alert:
   return rivian_lane_correction_alert("right")
 
 
+def rivian_nudge_timer_alert(*_args) -> Alert:
+  params = memory_params()
+  try:
+    remaining = max(0, min(1800, int(params.get("RivianPilotNudgeTimerRemaining") or 0)))
+  except (TypeError, ValueError):
+    remaining = 0
+  direction = params.get("RivianPilotNudgeTimerDirection") or ""
+  if isinstance(direction, bytes):
+    direction = direction.decode("utf-8", errors="ignore")
+  direction = "Left" if direction == "left" else "Right" if direction == "right" else ""
+  duration = f"{remaining // 60}:{remaining % 60:02d}" if remaining >= 60 else f"{remaining}s"
+  return Alert(
+    f"Nudge {direction} • {duration}",
+    "",
+    AlertStatus.normal, AlertSize.small,
+    Priority.LOW, VisualAlert.none, AudibleAlert.none, .2)
+
+
 class EventsSP(EventsBase):
   def __init__(self):
     super().__init__()
@@ -307,5 +325,8 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "",
       AlertStatus.normal, AlertSize.small,
       Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 2.),
+  },
+  EventNameSP.rivianPilotNudgeTimer: {
+    ET.PERMANENT: rivian_nudge_timer_alert,
   },
 }

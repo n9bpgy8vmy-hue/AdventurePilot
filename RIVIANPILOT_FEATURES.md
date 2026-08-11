@@ -35,6 +35,8 @@ Status: Go Live has completed successful vehicle testing. `2026.007.002` preserv
 
 `2026.007.033` separates measured center correction from Left/Right lane-position bias. Center correction is configurable from 1–10 inches; Left or Right adds its separately configured 1–10-inch bias, with the combined automatic request capped at 15 inches before the existing geometry, fork, boundary-clearance, and ramp limits. Curve and manual-nudge requests retain their 10-inch configuration limits. Observe-only calculations no longer compensate for an unpublished offset, and enabling Go Live always starts from zero with a fresh geometry reference.
 
+`2026.007.034` adds opt-in speed-adaptive measured centering and straight-road anti-ping-pong control. It filters sub-inch lane-center noise, requires a sustained opposite error before reversing, returns a Center-only correction through zero before building the opposite direction, and uses a slower speed-dependent straight-road ramp. The configured Left/Right bias remains additive, automatic curve avoidance remains higher priority, and manual nudge remains an authoritative fixed offset. A configurable silent, low-priority countdown shows the remaining manual-nudge hold time; safety alerts supersede it. Nudge lifecycle logs now distinguish start, re-latch, driver/blinker/inactive cancellation, and timer expiration.
+
 ## Feature 4 — Experimental Lane-Change-to-Turn Handover
 
 Create a natural transfer of lateral authority from native Nudge lane change, to a driver-controlled turn, and back to MADS after the new road is stable.

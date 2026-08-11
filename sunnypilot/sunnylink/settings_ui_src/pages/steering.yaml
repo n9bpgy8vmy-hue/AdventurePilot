@@ -336,6 +336,90 @@ sections:
         type: param
         key: RivianPilotLanePositionPreference
         equals: 0
+  - key: RivianPilotAdaptiveCenterCorrection
+    widget: toggle
+    title: Speed-Adaptive Centering
+    description: Reduce measured lane-center correction at highway speed while retaining stronger low-speed centering. Curve avoidance, bias, and manual nudge are unchanged.
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: not
+      condition:
+        type: param
+        key: RivianPilotLanePositionPreference
+        equals: 0
+  - key: RivianPilotCenterMinimumSpeed
+    widget: option
+    title: Centering Minimum Speed
+    description: Below this speed, measured lane-center correction remains off.
+    min: 5
+    max: 45
+    step: 5
+    unit:
+      metric: km/h
+      imperial: mph
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotAdaptiveCenterCorrection
+      equals: true
+  - key: RivianPilotCenterFullSpeed
+    widget: option
+    title: Full Centering Speed
+    description: At this speed, the full Center Correction Limit becomes available.
+    min: 10
+    max: 55
+    step: 5
+    unit:
+      metric: km/h
+      imperial: mph
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotAdaptiveCenterCorrection
+      equals: true
+  - key: RivianPilotCenterHighwaySpeed
+    widget: option
+    title: Highway Centering Speed
+    description: At and above this speed, correction is limited by Highway Center Correction.
+    min: 30
+    max: 85
+    step: 5
+    unit:
+      metric: km/h
+      imperial: mph
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotAdaptiveCenterCorrection
+      equals: true
+  - key: RivianPilotHighwayCenterCorrectionInches
+    widget: option
+    title: Highway Center Correction
+    description: Maximum measured centering correction at highway speed. Left or Right bias remains additional.
+    min: 1
+    max: 10
+    step: 1
+    unit: inches
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotAdaptiveCenterCorrection
+      equals: true
   - key: RivianPilotLanePositionBiasInches
     widget: option
     title: Lane Position Bias
@@ -414,8 +498,8 @@ sections:
       equals: true
   - key: RivianPilotNudgeHoldSeconds
     widget: option
-    title: Nudge Hold Time
-    description: Maximum time to retain a nudge preference when all confidence checks remain valid.
+    title: Maximum Nudge Hold Time
+    description: Maximum time to retain a nudge preference. Driver steering, a blinker, inactive lateral control, or expiration ends it sooner.
     options:
     - value: 5
       label: 5 seconds
@@ -437,6 +521,18 @@ sections:
       label: 15 minutes
     - value: 1800
       label: 30 minutes
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - type: param
+      key: RivianPilotNudgeOffset
+      equals: true
+  - key: RivianPilotNudgeTimerDisplay
+    widget: toggle
+    title: Show Nudge Countdown
+    description: Show a small silent countdown while a manual nudge is active. Safety alerts always take priority.
     visibility:
     - type: capability
       field: brand

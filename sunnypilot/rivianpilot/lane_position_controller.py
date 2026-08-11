@@ -4,6 +4,7 @@ import time
 
 from opendbc.car import structs
 
+from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 
@@ -45,6 +46,9 @@ CURVE_RAMP_OUT_MPS = 8.0 * INCH_TO_M
 # like a slow left/right weave at larger correction limits.
 CENTER_ERROR_FILTER_TAU_S = 1.5
 CENTER_ERROR_DEADBAND_M = 0.75 * INCH_TO_M
+CENTER_REVERSAL_STABLE_SECONDS = 1.5
+STRAIGHT_CENTER_RAMP_LOW_SPEED_IN_MPS = 2.0 * INCH_TO_M
+STRAIGHT_CENTER_RAMP_HIGH_SPEED_IN_MPS = 1.0 * INCH_TO_M
 PREDICTIVE_LOOKAHEAD_START_S = 0.5
 PREDICTIVE_LOOKAHEAD_END_S = 2.5
 PREDICTIVE_DIRECTION_STABLE_FRAMES = 3
@@ -67,6 +71,7 @@ class LanePositionController:
     self.observe = False
     self.go_live = False
     self.feature_logging = False
+    self.is_metric = False
     self.curve_enabled = True
     self.relaxed_geometry = False
     self.nudge_enabled = True
@@ -74,9 +79,15 @@ class LanePositionController:
     self.curve_threshold_pct = 35
     self.lane_position_preference = 0
     self.center_correction_inches = 5
+    self.adaptive_center_correction = False
+    self.center_minimum_speed = 15
+    self.center_full_speed = 30
+    self.center_highway_speed = 55
+    self.highway_center_correction_inches = 3
     self.lane_position_bias_inches = 3
     self.nudge_offset_inches = 3
     self.nudge_hold_seconds = 10
+    self.nudge_timer_display = True
     self.correction_alert_enabled = False
     self.vehicle_width_inches = DEFAULT_R1T_WIDTH_INCHES
     self.boundary_buffer_inches = DEFAULT_BOUNDARY_BUFFER_INCHES
@@ -89,7 +100,12 @@ class LanePositionController:
     self.last_output = None
     self.nudge_direction = 0
     self.nudge_until = 0.0
+    self.nudge_started_at = 0.0
+    self.last_nudge_timer_second = None
+    self.last_nudge_timer_heartbeat = 0.0
+    self.nudge_timer_cleared = False
     self.pending_nudge_direction = 0
+    self.pending_nudge_relatched = False
     self.curve_active = False
     self.curve_direction = 0
     self.curve_episode_id = 0
@@ -104,6 +120,9 @@ class LanePositionController:
     self.automatic_request_direction = 0
     self.automatic_output = 0.0
     self.filtered_center_error = None
+    self.center_output_direction = 0
+    self.center_reversal_direction = 0
+    self.center_reversal_since = 0.0
     self.faulted = False
     self.error_logged = False
     self.log_failure_count = 0
@@ -137,6 +156,7 @@ class LanePositionController:
     self.observe = self._bool_param("RivianPilotLanePositionObserve", False)
     self.go_live = self._bool_param("RivianPilotLanePositionGoLive", False)
     self.feature_logging = self._bool_param("RivianPilotFeatureLogging", False)
+    self.is_metric = self._bool_param("IsMetric", False)
     self.curve_enabled = self._bool_param("RivianPilotCurveOffset", True)
     self.relaxed_geometry = self._bool_param("RivianPilotLanePositionRelaxed", False)
     self.nudge_enabled = self._bool_param("RivianPilotNudgeOffset", True)
@@ -144,13 +164,110 @@ class LanePositionController:
     self.curve_threshold_pct = self._bounded_int_param("RivianPilotCurveThreshold", 35, 10, 90)
     self.lane_position_preference = self._bounded_int_param("RivianPilotLanePositionPreference", 0, 0, 3)
     self.center_correction_inches = self._bounded_int_param("RivianPilotCenterCorrectionInches", 5, 1, 10)
+    self.adaptive_center_correction = self._bool_param("RivianPilotAdaptiveCenterCorrection", False)
+    self.center_minimum_speed = self._bounded_int_param("RivianPilotCenterMinimumSpeed", 15, 5, 45)
+    self.center_full_speed = self._bounded_int_param("RivianPilotCenterFullSpeed", 30, 10, 55)
+    self.center_highway_speed = self._bounded_int_param("RivianPilotCenterHighwaySpeed", 55, 30, 85)
+    self.highway_center_correction_inches = self._bounded_int_param(
+      "RivianPilotHighwayCenterCorrectionInches", 3, 1, 10,
+    )
     self.lane_position_bias_inches = self._bounded_int_param("RivianPilotLanePositionBiasInches", 3, 1, 10)
     self.nudge_offset_inches = self._bounded_int_param("RivianPilotNudgeOffsetInches", 3, 2, 10)
     self.nudge_hold_seconds = self._bounded_int_param("RivianPilotNudgeHoldSeconds", 10, 5, 1800)
+    self.nudge_timer_display = self._bool_param("RivianPilotNudgeTimerDisplay", True)
     self.correction_alert_enabled = self._bool_param("RivianPilotLaneCorrectionAlert", False)
     self.vehicle_width_inches = self._bounded_int_param("RivianPilotVehicleWidthInches", DEFAULT_R1T_WIDTH_INCHES, 78, 86)
     self.boundary_buffer_inches = self._bounded_int_param("RivianPilotBoundaryBufferInches", DEFAULT_BOUNDARY_BUFFER_INCHES, 3, 12)
     self.poor_road_offset_inches = self._bounded_int_param("RivianPilotPoorRoadOffsetInches", DEFAULT_POOR_ROAD_OFFSET_INCHES, 1, 10)
+
+  def _speed_ms(self, configured_speed: int) -> float:
+    return configured_speed * (CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS)
+
+  def _adaptive_center_limit_m(self, speed_ms: float) -> float:
+    low_limit = self.center_correction_inches * INCH_TO_M
+    if not self.adaptive_center_correction:
+      return low_limit
+    minimum = self._speed_ms(self.center_minimum_speed)
+    full = self._speed_ms(self.center_full_speed)
+    highway = self._speed_ms(self.center_highway_speed)
+    if not minimum < full < highway:
+      speed_factor = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
+      minimum, full, highway = 15 * speed_factor, 30 * speed_factor, 55 * speed_factor
+    high_limit = min(low_limit, self.highway_center_correction_inches * INCH_TO_M)
+    if speed_ms <= minimum:
+      return 0.0
+    if speed_ms < full:
+      return low_limit * (speed_ms - minimum) / (full - minimum)
+    if speed_ms < highway:
+      blend = (speed_ms - full) / (highway - full)
+      return low_limit + blend * (high_limit - low_limit)
+    return high_limit
+
+  @staticmethod
+  def _straight_center_ramp_mps(speed_ms: float) -> float:
+    blend = max(0.0, min(1.0, (speed_ms - 25 * CV.MPH_TO_MS) / (55 * CV.MPH_TO_MS - 25 * CV.MPH_TO_MS)))
+    return STRAIGHT_CENTER_RAMP_LOW_SPEED_IN_MPS + blend * (
+      STRAIGHT_CENTER_RAMP_HIGH_SPEED_IN_MPS - STRAIGHT_CENTER_RAMP_LOW_SPEED_IN_MPS
+    )
+
+  def _clear_center_reversal(self) -> None:
+    self.center_output_direction = 0
+    self.center_reversal_direction = 0
+    self.center_reversal_since = 0.0
+
+  def _stable_center_correction(self, correction: float, now: float) -> tuple[float, str]:
+    requested_direction = 1 if correction > 0.0 else -1 if correction < 0.0 else 0
+    if requested_direction == 0:
+      self.center_reversal_direction = 0
+      self.center_reversal_since = 0.0
+      return 0.0, "deadband"
+    if self.center_output_direction == 0 or requested_direction == self.center_output_direction:
+      self.center_output_direction = requested_direction
+      self.center_reversal_direction = 0
+      self.center_reversal_since = 0.0
+      return correction, "stable"
+    if requested_direction != self.center_reversal_direction:
+      self.center_reversal_direction = requested_direction
+      self.center_reversal_since = now
+    if now - self.center_reversal_since < CENTER_REVERSAL_STABLE_SECONDS:
+      return 0.0, "reversal_wait"
+    # The rate limiter below must return the prior correction through zero
+    # before this newly stable opposite direction is allowed to build.
+    if self.lane_position_preference == 1 and self.automatic_output * self.center_output_direction > 0.5 * INCH_TO_M:
+      return 0.0, "reversal_zero_crossing"
+    self.center_output_direction = requested_direction
+    self.center_reversal_direction = 0
+    self.center_reversal_since = 0.0
+    return correction, "reversal_accepted"
+
+  def _clear_nudge_timer(self) -> None:
+    if self.nudge_timer_cleared:
+      return
+    self.last_nudge_timer_second = None
+    self.last_nudge_timer_heartbeat = 0.0
+    try:
+      self.params_memory.put("RivianPilotNudgeTimerRemaining", 0)
+      self.params_memory.put("RivianPilotNudgeTimerHeartbeat", 0.0)
+    except Exception:
+      pass
+    self.nudge_timer_cleared = True
+
+  def _publish_nudge_timer(self, now: float) -> None:
+    if not self.nudge_timer_display or self.nudge_direction == 0 or now >= self.nudge_until:
+      self._clear_nudge_timer()
+      return
+    remaining = max(1, int(math.ceil(self.nudge_until - now)))
+    try:
+      self.nudge_timer_cleared = False
+      if remaining != self.last_nudge_timer_second:
+        self.params_memory.put("RivianPilotNudgeTimerDirection", "left" if self.nudge_direction > 0 else "right")
+        self.params_memory.put("RivianPilotNudgeTimerRemaining", remaining)
+        self.last_nudge_timer_second = remaining
+      if now - self.last_nudge_timer_heartbeat >= 0.5:
+        self.params_memory.put("RivianPilotNudgeTimerHeartbeat", float(now))
+        self.last_nudge_timer_heartbeat = now
+    except Exception as e:
+      self._log("nudge_timer_failure_suppressed", error_type=type(e).__name__)
 
   def _stable_center_error(self, compensated_error: float, update_dt: float) -> float:
     """Filter lane-center noise while preserving the configured hard limit."""
@@ -381,9 +498,17 @@ class LanePositionController:
 
   def _reset(self, reason: str) -> None:
     had_offset = self.last_output not in (None, 0.0) or self.nudge_direction != 0 or self.curve_active
+    if self.nudge_direction:
+      now = time.monotonic()
+      self._log("nudge_cancelled", reason=reason,
+                elapsed_seconds=round(max(0.0, now - self.nudge_started_at), 2),
+                remaining_seconds=round(max(0.0, self.nudge_until - now), 2))
     self.nudge_direction = 0
     self.nudge_until = 0.0
+    self.nudge_started_at = 0.0
+    self._clear_nudge_timer()
     self.pending_nudge_direction = 0
+    self.pending_nudge_relatched = False
     self.curve_active = False
     self.curve_direction = 0
     self.curve_episode_started = 0.0
@@ -397,6 +522,7 @@ class LanePositionController:
     self.automatic_request_direction = 0
     self.automatic_output = 0.0
     self.filtered_center_error = None
+    self._clear_center_reversal()
     self._publish(0.0)
     if had_offset:
       self._log("reset", reason=reason)
@@ -411,6 +537,7 @@ class LanePositionController:
       self.last_param_read = now
       if self.lane_position_preference != previous_lane_position_preference:
         self.filtered_center_error = None
+        self._clear_center_reversal()
       if self.go_live and not previous_go_live:
         # Observation may have a fully ramped simulated output. A live session
         # must always start from zero and build a fresh geometry reference.
@@ -432,6 +559,11 @@ class LanePositionController:
 
     torque = self._finite(CS.steeringTorque)
     if CS.steeringPressed:
+      previous_nudge_direction = self.nudge_direction
+      if self.nudge_direction:
+        self._log("nudge_cancelled", reason="driver_steering",
+                  elapsed_seconds=round(max(0.0, now - self.nudge_started_at), 2),
+                  remaining_seconds=round(max(0.0, self.nudge_until - now), 2))
       self.curve_active = False
       self.curve_direction = 0
       self.curve_reference_samples = []
@@ -442,16 +574,24 @@ class LanePositionController:
       self.automatic_output = 0.0
       self.automatic_request_direction = 0
       self.filtered_center_error = None
+      self._clear_center_reversal()
       self.nudge_direction = 0
       self.nudge_until = 0.0
+      self.nudge_started_at = 0.0
+      self._clear_nudge_timer()
       self.pending_nudge_direction = 1 if torque > NUDGE_TORQUE_THRESHOLD else -1 if torque < -NUDGE_TORQUE_THRESHOLD else 0
+      self.pending_nudge_relatched = previous_nudge_direction != 0 and self.pending_nudge_direction == previous_nudge_direction
       self._publish(0.0)
       return
     if self.nudge_enabled and self.pending_nudge_direction:
+      relatch = self.pending_nudge_relatched
       self.nudge_direction = self.pending_nudge_direction
       self.nudge_until = now + self.nudge_hold_seconds
+      self.nudge_started_at = now
       self.pending_nudge_direction = 0
-      self._log("nudge_latched", direction=self.nudge_direction, hold_seconds=self.nudge_hold_seconds)
+      self.pending_nudge_relatched = False
+      self._log("nudge_relatched" if relatch else "nudge_started",
+                direction=self.nudge_direction, hold_seconds=self.nudge_hold_seconds)
 
     desired_curvature = self._finite(controls.desiredCurvature)
     lat_accel = desired_curvature * max(self._finite(CS.vEgo), 0.0) ** 2
@@ -495,6 +635,8 @@ class LanePositionController:
     compensated_center_error = None
     filtered_center_error = None
     center_correction = 0.0
+    center_limit_m = 0.0
+    center_stability_state = "inactive"
     reference_state = "not_needed"
     target = 0.0
     base_camera_offset = 0.0
@@ -518,8 +660,16 @@ class LanePositionController:
       self.fork_recovery_frames = 0
       self.automatic_output = 0.0
       self.filtered_center_error = None
+      self._clear_center_reversal()
+      self._publish_nudge_timer(now)
     else:
+      if self.nudge_direction:
+        self._log("nudge_expired", direction=self.nudge_direction,
+                  elapsed_seconds=round(max(0.0, now - self.nudge_started_at), 2))
       self.nudge_direction = 0
+      self.nudge_until = 0.0
+      self.nudge_started_at = 0.0
+      self._clear_nudge_timer()
       release_threshold = self.curve_threshold_pct * CURVE_RELEASE_RATIO
       was_curve_active = self.curve_active
       next_curve_active = self.curve_enabled and (
@@ -571,8 +721,14 @@ class LanePositionController:
           published_feedback = self.last_output or 0.0
           compensated_center_error = model_center_error + published_feedback
           filtered_center_error = self._stable_center_error(compensated_center_error, update_dt)
-          center_limit_m = self.center_correction_inches * INCH_TO_M
-          center_correction = max(-center_limit_m, min(center_limit_m, filtered_center_error))
+          center_limit_m = self._adaptive_center_limit_m(max(self._finite(CS.vEgo), 0.0))
+          raw_center_correction = max(-center_limit_m, min(center_limit_m, filtered_center_error))
+          if self.curve_active:
+            center_correction = raw_center_correction
+            center_stability_state = "curve_priority"
+            self._clear_center_reversal()
+          else:
+            center_correction, center_stability_state = self._stable_center_correction(raw_center_correction, now)
           bias_m = self.lane_position_bias_inches * INCH_TO_M
           if self.lane_position_preference == 1:  # measured center
             lane_position_request = center_correction
@@ -638,6 +794,7 @@ class LanePositionController:
           self.curve_geometry_misses += 1
           if self.curve_geometry_misses >= CURVE_GEOMETRY_MISS_LIMIT:
             self.filtered_center_error = None
+            self._clear_center_reversal()
           reference_state = "missing"
           if geometry_status == "fork or merge":
             if not self.fork_hold:
@@ -676,6 +833,8 @@ class LanePositionController:
           ramp_in_mps = SHARP_CURVE_RAMP_IN_MPS
         elif self.curve_active and curve_strength >= 55.0:
           ramp_in_mps = STRONG_CURVE_RAMP_IN_MPS
+        if not self.curve_active and self.adaptive_center_correction:
+          ramp_in_mps = self._straight_center_ramp_mps(max(self._finite(CS.vEgo), 0.0))
         rate = ramp_in_mps if abs(target) > abs(self.automatic_output) else CURVE_RAMP_OUT_MPS
         max_step = rate * update_dt
         delta = max(-max_step, min(max_step, target - self.automatic_output))
@@ -739,6 +898,12 @@ class LanePositionController:
                 configured_threshold_pct=self.curve_threshold_pct,
                 configured_lane_position=self.lane_position_preference,
                 configured_center_correction_inches=self.center_correction_inches,
+                adaptive_center_correction=self.adaptive_center_correction,
+                adaptive_center_limit_inches=round(center_limit_m / INCH_TO_M, 2),
+                configured_center_minimum_speed=self.center_minimum_speed,
+                configured_center_full_speed=self.center_full_speed,
+                configured_center_highway_speed=self.center_highway_speed,
+                configured_highway_center_correction_inches=self.highway_center_correction_inches,
                 configured_lane_position_inches=self.lane_position_bias_inches,
                 configured_vehicle_width_inches=self.vehicle_width_inches,
                 configured_boundary_buffer_inches=self.boundary_buffer_inches,
@@ -753,7 +918,10 @@ class LanePositionController:
                 filtered_center_error_m=round(filtered_center_error, 4)
                 if filtered_center_error is not None else None,
                 center_error_deadband_inches=round(CENTER_ERROR_DEADBAND_M / INCH_TO_M, 2),
+                center_stability_state=center_stability_state,
+                center_reversal_direction=self.center_reversal_direction,
                 center_correction_m=round(center_correction, 4),
+                nudge_remaining_seconds=round(max(0.0, self.nudge_until - now), 1) if self.nudge_direction else None,
                 requested_offset_m=round(requested, 4),
                 movement_clearance_m=round(movement_clearance, 4) if movement_clearance is not None else None,
                 reference_clearance_m=round(self.curve_reference_clearance, 4)

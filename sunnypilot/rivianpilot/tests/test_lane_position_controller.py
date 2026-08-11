@@ -18,9 +18,15 @@ def params(overrides=None):
     "RivianPilotCurveThreshold": 35,
     "RivianPilotLanePositionPreference": 0,
     "RivianPilotCenterCorrectionInches": 5,
+    "RivianPilotAdaptiveCenterCorrection": False,
+    "RivianPilotCenterMinimumSpeed": 15,
+    "RivianPilotCenterFullSpeed": 30,
+    "RivianPilotCenterHighwaySpeed": 55,
+    "RivianPilotHighwayCenterCorrectionInches": 3,
     "RivianPilotLanePositionBiasInches": 3,
     "RivianPilotNudgeOffsetInches": 3,
     "RivianPilotNudgeHoldSeconds": 10,
+    "RivianPilotNudgeTimerDisplay": True,
     "RivianPilotLaneCorrectionAlert": False,
     "RivianPilotVehicleWidthInches": 82,
     "RivianPilotBoundaryBufferInches": 5,
@@ -292,6 +298,44 @@ def test_center_filter_rejects_single_frame_direction_reversal():
   feature.update(car_state(), True, opposite, SimpleNamespace(desiredCurvature=0.0), now=4.0)
   assert feature.filtered_center_error > 0.0
   assert feature.last_output >= 0.0
+
+
+def test_adaptive_center_limit_ramps_down_at_highway_speed():
+  feature = LanePositionController(params({
+    "RivianPilotAdaptiveCenterCorrection": True,
+    "RivianPilotCenterCorrectionInches": 10,
+    "RivianPilotHighwayCenterCorrectionInches": 3,
+  }))
+  assert feature._adaptive_center_limit_m(10 * 0.44704) == 0.0
+  assert abs(feature._adaptive_center_limit_m(30 * 0.44704) - 10 * 0.0254) < 1e-9
+  assert abs(feature._adaptive_center_limit_m(55 * 0.44704) - 3 * 0.0254) < 1e-9
+
+
+def test_center_direction_reversal_requires_stability_and_zero_crossing():
+  feature = LanePositionController(params({"RivianPilotLanePositionPreference": 1}))
+  correction, state = feature._stable_center_correction(0.1, 1.0)
+  assert correction > 0.0 and state == "stable"
+  feature.automatic_output = 0.1
+  correction, state = feature._stable_center_correction(-0.1, 1.2)
+  assert correction == 0.0 and state == "reversal_wait"
+  correction, state = feature._stable_center_correction(-0.1, 3.0)
+  assert correction == 0.0 and state == "reversal_zero_crossing"
+  feature.automatic_output = 0.0
+  correction, state = feature._stable_center_correction(-0.1, 3.2)
+  assert correction < 0.0 and state == "reversal_accepted"
+
+
+def test_nudge_countdown_is_published_without_chime_or_control_dependency():
+  persistent = params()
+  memory = MagicMock()
+  feature = LanePositionController(persistent, memory)
+  feature.nudge_direction = 1
+  feature.nudge_started_at = 1.0
+  feature.nudge_until = 11.0
+  feature._publish_nudge_timer(1.2)
+  memory.put.assert_any_call("RivianPilotNudgeTimerDirection", "left")
+  memory.put.assert_any_call("RivianPilotNudgeTimerRemaining", 10)
+  memory.put.assert_any_call("RivianPilotNudgeTimerHeartbeat", 1.2)
 
 
 def test_center_correction_plus_bias_can_reach_fifteen_inches():

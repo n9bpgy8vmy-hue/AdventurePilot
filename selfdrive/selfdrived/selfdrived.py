@@ -116,6 +116,7 @@ class SelfdriveD(CruiseHelper):
     self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
     self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
     self.lane_correction_alert_enabled = self.params.get_bool("RivianPilotLaneCorrectionAlert")
+    self.nudge_timer_display_enabled = self.params.get_bool("RivianPilotNudgeTimerDisplay")
     self.rivianpilot_bsm_ready_alert_shown = False
 
     car_recognized = self.CP.brand != 'mock'
@@ -367,6 +368,15 @@ class SelfdriveD(CruiseHelper):
             self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadLeft)
           elif direction == "right":
             self.events_sp.add(EventNameSP.rivianPilotLaneCorrectionAheadRight)
+      except (TypeError, ValueError):
+        pass
+
+    if self.CP.brand == "rivian" and self.nudge_timer_display_enabled:
+      try:
+        timer_heartbeat = float(self.params_memory.get("RivianPilotNudgeTimerHeartbeat") or 0.0)
+        timer_remaining = int(self.params_memory.get("RivianPilotNudgeTimerRemaining") or 0)
+        if timer_remaining > 0 and 0.0 <= time.monotonic() - timer_heartbeat <= 1.0:
+          self.events_sp.add(EventNameSP.rivianPilotNudgeTimer)
       except (TypeError, ValueError):
         pass
 
@@ -679,6 +689,7 @@ class SelfdriveD(CruiseHelper):
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
       self.rivianpilot_feature_logging = self.params.get_bool("RivianPilotFeatureLogging")
       self.lane_correction_alert_enabled = self.params.get_bool("RivianPilotLaneCorrectionAlert")
+      self.nudge_timer_display_enabled = self.params.get_bool("RivianPilotNudgeTimerDisplay")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
 
