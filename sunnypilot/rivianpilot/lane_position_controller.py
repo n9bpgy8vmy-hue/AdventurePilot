@@ -39,6 +39,12 @@ CURVE_RAMP_IN_MPS = 3.0 * INCH_TO_M
 STRONG_CURVE_RAMP_IN_MPS = 4.0 * INCH_TO_M
 SHARP_CURVE_RAMP_IN_MPS = 5.0 * INCH_TO_M
 CURVE_RAMP_OUT_MPS = 8.0 * INCH_TO_M
+# Straight-road lane centering uses a filtered model-to-lane-center error. The
+# model path and lane-line estimates can move independently by a few pixels from
+# frame to frame; feeding that noise directly back through CameraOffset feels
+# like a slow left/right weave at larger correction limits.
+CENTER_ERROR_FILTER_TAU_S = 1.5
+CENTER_ERROR_DEADBAND_M = 0.75 * INCH_TO_M
 PREDICTIVE_LOOKAHEAD_START_S = 0.5
 PREDICTIVE_LOOKAHEAD_END_S = 2.5
 PREDICTIVE_DIRECTION_STABLE_FRAMES = 3
@@ -97,6 +103,7 @@ class LanePositionController:
     self.predicted_curve_stable_frames = 0
     self.automatic_request_direction = 0
     self.automatic_output = 0.0
+    self.filtered_center_error = None
     self.faulted = False
     self.error_logged = False
     self.log_failure_count = 0
@@ -144,6 +151,18 @@ class LanePositionController:
     self.vehicle_width_inches = self._bounded_int_param("RivianPilotVehicleWidthInches", DEFAULT_R1T_WIDTH_INCHES, 78, 86)
     self.boundary_buffer_inches = self._bounded_int_param("RivianPilotBoundaryBufferInches", DEFAULT_BOUNDARY_BUFFER_INCHES, 3, 12)
     self.poor_road_offset_inches = self._bounded_int_param("RivianPilotPoorRoadOffsetInches", DEFAULT_POOR_ROAD_OFFSET_INCHES, 1, 10)
+
+  def _stable_center_error(self, compensated_error: float, update_dt: float) -> float:
+    """Filter lane-center noise while preserving the configured hard limit."""
+    compensated_error = self._finite(compensated_error)
+    if self.filtered_center_error is None:
+      self.filtered_center_error = compensated_error
+    else:
+      alpha = 1.0 - math.exp(-max(0.0, update_dt) / CENTER_ERROR_FILTER_TAU_S)
+      self.filtered_center_error += alpha * (compensated_error - self.filtered_center_error)
+    if abs(self.filtered_center_error) < CENTER_ERROR_DEADBAND_M:
+      return 0.0
+    return self.filtered_center_error
 
   def _publish_correction_alert(self, target_m: float, source: str, now: float) -> None:
     if (not self.correction_alert_enabled or not self.go_live or
@@ -377,6 +396,7 @@ class LanePositionController:
     self.predicted_curve_stable_frames = 0
     self.automatic_request_direction = 0
     self.automatic_output = 0.0
+    self.filtered_center_error = None
     self._publish(0.0)
     if had_offset:
       self._log("reset", reason=reason)
@@ -386,8 +406,11 @@ class LanePositionController:
     now = time.monotonic() if now is None else now
     if now - self.last_param_read >= PARAM_REFRESH_SECONDS:
       previous_go_live = self.go_live
+      previous_lane_position_preference = self.lane_position_preference
       self.get_params()
       self.last_param_read = now
+      if self.lane_position_preference != previous_lane_position_preference:
+        self.filtered_center_error = None
       if self.go_live and not previous_go_live:
         # Observation may have a fully ramped simulated output. A live session
         # must always start from zero and build a fresh geometry reference.
@@ -418,6 +441,7 @@ class LanePositionController:
       self.fork_recovery_frames = 0
       self.automatic_output = 0.0
       self.automatic_request_direction = 0
+      self.filtered_center_error = None
       self.nudge_direction = 0
       self.nudge_until = 0.0
       self.pending_nudge_direction = 1 if torque > NUDGE_TORQUE_THRESHOLD else -1 if torque < -NUDGE_TORQUE_THRESHOLD else 0
@@ -469,6 +493,7 @@ class LanePositionController:
     measured_lane_center = None
     model_center_error = None
     compensated_center_error = None
+    filtered_center_error = None
     center_correction = 0.0
     reference_state = "not_needed"
     target = 0.0
@@ -492,6 +517,7 @@ class LanePositionController:
       self.fork_hold = False
       self.fork_recovery_frames = 0
       self.automatic_output = 0.0
+      self.filtered_center_error = None
     else:
       self.nudge_direction = 0
       release_threshold = self.curve_threshold_pct * CURVE_RELEASE_RATIO
@@ -544,8 +570,9 @@ class LanePositionController:
           # canceling itself on the next model frame.
           published_feedback = self.last_output or 0.0
           compensated_center_error = model_center_error + published_feedback
+          filtered_center_error = self._stable_center_error(compensated_center_error, update_dt)
           center_limit_m = self.center_correction_inches * INCH_TO_M
-          center_correction = max(-center_limit_m, min(center_limit_m, compensated_center_error))
+          center_correction = max(-center_limit_m, min(center_limit_m, filtered_center_error))
           bias_m = self.lane_position_bias_inches * INCH_TO_M
           if self.lane_position_preference == 1:  # measured center
             lane_position_request = center_correction
@@ -609,6 +636,8 @@ class LanePositionController:
           reference_state = "ready" if self.curve_reference_clearance is not None else "collecting"
         else:
           self.curve_geometry_misses += 1
+          if self.curve_geometry_misses >= CURVE_GEOMETRY_MISS_LIMIT:
+            self.filtered_center_error = None
           reference_state = "missing"
           if geometry_status == "fork or merge":
             if not self.fork_hold:
@@ -721,6 +750,9 @@ class LanePositionController:
                 model_center_error_m=round(model_center_error, 4) if model_center_error is not None else None,
                 compensated_center_error_m=round(compensated_center_error, 4)
                 if compensated_center_error is not None else None,
+                filtered_center_error_m=round(filtered_center_error, 4)
+                if filtered_center_error is not None else None,
+                center_error_deadband_inches=round(CENTER_ERROR_DEADBAND_M / INCH_TO_M, 2),
                 center_correction_m=round(center_correction, 4),
                 requested_offset_m=round(requested, 4),
                 movement_clearance_m=round(movement_clearance, 4) if movement_clearance is not None else None,

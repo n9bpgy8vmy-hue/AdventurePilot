@@ -265,6 +265,35 @@ def test_center_corrects_model_bias_on_straight_road():
   assert abs(feature.last_output - 4 * 0.0254) < 1e-9
 
 
+def test_center_deadband_ignores_sub_inch_lane_geometry_noise():
+  feature = LanePositionController(params({
+    "RivianPilotLanePositionPreference": 1,
+    "RivianPilotCenterCorrectionInches": 5,
+  }))
+  establish_straight(feature, model(path_y=0.5 * 0.0254))
+  assert feature.filtered_center_error is not None
+  assert feature.automatic_output == 0.0
+  assert feature.last_output == 0.0
+
+
+def test_center_filter_rejects_single_frame_direction_reversal():
+  feature = LanePositionController(params({
+    "RivianPilotLanePositionPreference": 1,
+    "RivianPilotCenterCorrectionInches": 5,
+  }))
+  establish_straight(feature, model(path_y=5 * 0.0254))
+  assert feature.filtered_center_error > 0.0
+  assert feature.last_output > 0.0
+
+  # Express a five-inch opposite error after removing the path shift caused by
+  # the currently published transform. A single noisy frame must not reverse
+  # the persistent lane-position request.
+  opposite = model(path_y=(-5 * 0.0254) - feature.automatic_output)
+  feature.update(car_state(), True, opposite, SimpleNamespace(desiredCurvature=0.0), now=4.0)
+  assert feature.filtered_center_error > 0.0
+  assert feature.last_output >= 0.0
+
+
 def test_center_correction_plus_bias_can_reach_fifteen_inches():
   feature = LanePositionController(params({
     "RivianPilotLanePositionPreference": 2,
@@ -305,13 +334,17 @@ def test_observe_only_does_not_compensate_for_unpublished_output():
   original_get_bool = p.get_bool.side_effect
   p.get_bool.side_effect = lambda key: False if key == "RivianPilotLanePositionGoLive" else original_get_bool(key)
   feature = LanePositionController(p)
-  establish_straight(feature, model(path_y=0.1))
+  road_model = model(path_y=0.1)
+  controls = SimpleNamespace(desiredCurvature=0.0)
+  for i in range(12):
+    feature.update(car_state(), True, road_model, controls, now=1.0 + i * 0.2)
   assert feature.last_output == 0.0
   # Observe mode may still ramp its diagnostic target, but must calculate each
   # frame from the unchanged model path rather than feeding back unpublished output.
   assert feature.automatic_output > 0.0
   output_after_first_run = feature.automatic_output
-  establish_straight(feature, model(path_y=0.1), start=10.0)
+  for i in range(12):
+    feature.update(car_state(), True, road_model, controls, now=10.0 + i * 0.2)
   assert feature.last_output == 0.0
   assert feature.automatic_output >= output_after_first_run
 
