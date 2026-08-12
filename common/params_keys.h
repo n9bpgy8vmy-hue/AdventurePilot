@@ -297,6 +297,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RivianPilotLanePositionRelaxed", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPilotNudgeOffset", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"RivianPilotNudgeOffsetInches", {PERSISTENT | BACKUP, INT, "3"}},
+    {"RivianPilotNudgeTorqueThresholdTenths", {PERSISTENT | BACKUP, INT, "7"}},
     {"RivianPilotNudgeHoldSeconds", {PERSISTENT | BACKUP, INT, "10"}},
     {"RivianPilotNudgeTimerDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"RivianPilotActiveOffsetDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},

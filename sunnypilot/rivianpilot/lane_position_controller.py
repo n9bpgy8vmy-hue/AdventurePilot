@@ -27,7 +27,8 @@ MIN_LANE_PROBABILITY = 0.65
 MIN_LANE_WIDTH_M = 2.7
 MAX_LANE_WIDTH_M = 4.8
 MAX_CURVE_LAT_ACCEL = 3.0
-NUDGE_TORQUE_THRESHOLD = 1.0
+DEFAULT_NUDGE_TORQUE_THRESHOLD = 0.7
+NUDGE_CANCEL_GRACE_SECONDS = 0.5
 PARAM_REFRESH_SECONDS = 1.0
 UPDATE_PERIOD_SECONDS = 0.1
 SAMPLE_LOG_PERIOD_SECONDS = 0.5
@@ -86,6 +87,7 @@ class LanePositionController:
     self.highway_center_correction_inches = 3
     self.lane_position_bias_inches = 3
     self.nudge_offset_inches = 3
+    self.nudge_torque_threshold = DEFAULT_NUDGE_TORQUE_THRESHOLD
     self.nudge_hold_seconds = 10
     self.nudge_timer_display = True
     self.active_offset_display = True
@@ -110,6 +112,8 @@ class LanePositionController:
     self.active_offset_status_cleared = False
     self.pending_nudge_direction = 0
     self.pending_nudge_relatched = False
+    self.pending_nudge_peak_torque = 0.0
+    self.nudge_trigger_peak_torque = 0.0
     self.curve_active = False
     self.curve_direction = 0
     self.curve_episode_id = 0
@@ -177,6 +181,7 @@ class LanePositionController:
     )
     self.lane_position_bias_inches = self._bounded_int_param("RivianPilotLanePositionBiasInches", 3, 1, 10)
     self.nudge_offset_inches = self._bounded_int_param("RivianPilotNudgeOffsetInches", 3, 2, 10)
+    self.nudge_torque_threshold = self._bounded_int_param("RivianPilotNudgeTorqueThresholdTenths", 7, 5, 15) / 10.0
     self.nudge_hold_seconds = self._bounded_int_param("RivianPilotNudgeHoldSeconds", 10, 5, 1800)
     self.nudge_timer_display = self._bool_param("RivianPilotNudgeTimerDisplay", True)
     self.active_offset_display = self._bool_param("RivianPilotActiveOffsetDisplay", True)
@@ -592,6 +597,8 @@ class LanePositionController:
     self._clear_nudge_timer()
     self.pending_nudge_direction = 0
     self.pending_nudge_relatched = False
+    self.pending_nudge_peak_torque = 0.0
+    self.nudge_trigger_peak_torque = 0.0
     self.curve_active = False
     self.curve_direction = 0
     self.curve_episode_started = 0.0
@@ -643,7 +650,8 @@ class LanePositionController:
     torque = self._finite(CS.steeringTorque)
     if CS.steeringPressed:
       previous_nudge_direction = self.nudge_direction
-      if self.nudge_direction:
+      within_nudge_grace = self.nudge_direction != 0 and now - self.nudge_started_at <= NUDGE_CANCEL_GRACE_SECONDS
+      if self.nudge_direction and not within_nudge_grace:
         self._log("nudge_cancelled", reason="driver_steering",
                   elapsed_seconds=round(max(0.0, now - self.nudge_started_at), 2),
                   remaining_seconds=round(max(0.0, self.nudge_until - now), 2))
@@ -658,12 +666,20 @@ class LanePositionController:
       self.automatic_request_direction = 0
       self.filtered_center_error = None
       self._clear_center_reversal()
-      self.nudge_direction = 0
-      self.nudge_until = 0.0
-      self.nudge_started_at = 0.0
+      if not within_nudge_grace:
+        self.nudge_direction = 0
+        self.nudge_until = 0.0
+        self.nudge_started_at = 0.0
+        self.nudge_trigger_peak_torque = 0.0
       self._clear_nudge_timer()
-      self.pending_nudge_direction = 1 if torque > NUDGE_TORQUE_THRESHOLD else -1 if torque < -NUDGE_TORQUE_THRESHOLD else 0
-      self.pending_nudge_relatched = previous_nudge_direction != 0 and self.pending_nudge_direction == previous_nudge_direction
+      if abs(torque) >= self.nudge_torque_threshold:
+        candidate_direction = 1 if torque > 0.0 else -1
+        if self.pending_nudge_direction != candidate_direction:
+          self.pending_nudge_peak_torque = torque
+        elif abs(torque) > abs(self.pending_nudge_peak_torque):
+          self.pending_nudge_peak_torque = torque
+        self.pending_nudge_direction = candidate_direction
+        self.pending_nudge_relatched = previous_nudge_direction != 0 and candidate_direction == previous_nudge_direction
       self._publish(0.0)
       return
     if self.nudge_enabled and self.pending_nudge_direction:
@@ -671,10 +687,15 @@ class LanePositionController:
       self.nudge_direction = self.pending_nudge_direction
       self.nudge_until = now + self.nudge_hold_seconds
       self.nudge_started_at = now
+      self.nudge_trigger_peak_torque = self.pending_nudge_peak_torque
       self.pending_nudge_direction = 0
       self.pending_nudge_relatched = False
+      self.pending_nudge_peak_torque = 0.0
       self._log("nudge_relatched" if relatch else "nudge_started",
-                direction=self.nudge_direction, hold_seconds=self.nudge_hold_seconds)
+                direction=self.nudge_direction, hold_seconds=self.nudge_hold_seconds,
+                trigger_peak_torque=round(self.nudge_trigger_peak_torque, 3),
+                configured_torque_threshold=round(self.nudge_torque_threshold, 2),
+                activation_after_release=True, cancellation_grace_seconds=NUDGE_CANCEL_GRACE_SECONDS)
 
     desired_curvature = self._finite(controls.desiredCurvature)
     lat_accel = desired_curvature * max(self._finite(CS.vEgo), 0.0) ** 2
@@ -759,6 +780,13 @@ class LanePositionController:
         curve_strength >= (release_threshold if self.curve_active else self.curve_threshold_pct)
       )
       next_curve_direction = 1 if curve_lat_accel > 0.0 else -1 if curve_lat_accel < 0.0 else 0
+      # Once a curve episode is established, do not allow prediction noise or
+      # a visible future bend to reverse the correction while still in it.
+      # A new direction is accepted only after the current episode releases.
+      if was_curve_active and next_curve_active and self.curve_direction:
+        next_curve_direction = self.curve_direction
+        if next_curve_direction * curve_lat_accel < 0.0:
+          curve_lat_accel = math.copysign(abs(curve_lat_accel), next_curve_direction)
       new_episode = next_curve_active and (
         not was_curve_active or next_curve_direction != self.curve_direction
       )
@@ -786,10 +814,11 @@ class LanePositionController:
       automatic_active = position_active or (self.curve_active and curve_lat_accel != 0.0)
       if automatic_active:
         if self.curve_active and curve_lat_accel != 0.0:
-          # Positive CameraOffset moves driver-left. Move opposite the curve:
-          # positive/left curvature requests negative/driver-right, and vice versa.
+          # The model transform's physical response on the Rivian is opposite
+          # the historical assumption here. This sign is intentionally local
+          # to curve avoidance; lane position and manual nudge retain theirs.
           base_offset = self.curve_offset_inches * INCH_TO_M
-          curve_avoidance_request = -math.copysign(base_offset, curve_lat_accel)
+          curve_avoidance_request = math.copysign(base_offset, curve_lat_accel)
 
         corridor_horizon_m = max(SAMPLE_DISTANCE_M, min(MAX_CORRIDOR_HORIZON_M,
                                                         max(self._finite(CS.vEgo), 0.0) * PREDICTIVE_LOOKAHEAD_END_S))
