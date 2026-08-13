@@ -1,0 +1,220 @@
+import numpy as np
+
+from openpilot.sunnypilot.rivianpilot.vision_bsmd import (
+  BASE_INTERVAL,
+  CANDIDATE_CONFIDENCE_RATIO,
+  CRITICAL_SERVICES,
+  CPU_TRIP_SECONDS,
+  DRIVING_STACK_STABLE_SECONDS,
+  FOLLOWUP_INTERVAL,
+  FOLLOWUP_COOLDOWN,
+  FOLLOWUP_WINDOW,
+  LATENCY_TRIP_MS,
+  MAX_SLOW_INFERENCES,
+  DRIVING_STACK_STARTUP_TIMEOUT,
+  MODEL_STAGE_COOLDOWN,
+  ONROAD_STARTUP_DELAY,
+  VisionBSMDaemon,
+)
+
+
+def test_opencv_observer_uses_one_hz_resting_and_two_hz_confirmation():
+  assert BASE_INTERVAL == 1.0
+  assert FOLLOWUP_INTERVAL == 0.5
+  assert FOLLOWUP_INTERVAL < BASE_INTERVAL
+
+
+def test_candidate_detection_uses_sub_threshold_confidence_only_for_scheduling():
+  daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
+  daemon._confidence_threshold = 0.8
+  daemon.inference = type("FakeInference", (), {"confidence": {"left": 0.0, "right": 0.0}})()
+
+  daemon.inference.confidence["left"] = 0.8 * CANDIDATE_CONFIDENCE_RATIO - 0.001
+  assert not daemon._candidate_detected("left")
+  daemon.inference.confidence["left"] = 0.8 * CANDIDATE_CONFIDENCE_RATIO
+  assert daemon._candidate_detected("left")
+
+
+def test_candidate_confirmation_burst_is_bounded_and_has_cooldown():
+  daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
+  daemon.followup_until = 0.0
+  daemon.followup_cooldown_until = 0.0
+  daemon._request_followup(100.0)
+  assert daemon.followup_until == 100.0 + FOLLOWUP_WINDOW
+  assert daemon.followup_cooldown_until == 100.0 + FOLLOWUP_WINDOW + FOLLOWUP_COOLDOWN
+
+  daemon._request_followup(101.0)
+  assert daemon.followup_until == 100.0 + FOLLOWUP_WINDOW
+  daemon._request_followup(102.0)
+  assert daemon.followup_until == 100.0 + FOLLOWUP_WINDOW
+  daemon._request_followup(104.0)
+  assert daemon.followup_until == 104.0 + FOLLOWUP_WINDOW
+
+
+def test_nv12_decoder_returns_zero_copy_padded_view():
+  width, height, stride = 4, 4, 8
+  raw = bytearray(range(height * 3 // 2 * stride))
+  image = VisionBSMDaemon._decode_nv12_frame(raw, width, height, stride)
+  assert image.shape == (height * 3 // 2, stride)
+  assert np.shares_memory(image, np.frombuffer(raw, dtype=np.uint8))
+  raw[0] = 255
+  assert image[0, 0] == 255
+
+
+class FakeSM:
+  def __init__(self, healthy=True):
+    self.valid = dict.fromkeys(CRITICAL_SERVICES, healthy)
+    self.alive = dict.fromkeys(CRITICAL_SERVICES, healthy)
+    self.freq_ok = dict.fromkeys(CRITICAL_SERVICES, healthy)
+
+
+def daemon_for_guard():
+  daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
+  daemon._slow_inferences = 0
+  daemon._cooldown_count = 0
+  daemon._cpu_overload_since = 0.0
+  daemon._tripped_for_drive = False
+  daemon._trip_reason = ""
+  daemon._set_inactive = lambda reset=False: None
+  daemon._set_available = lambda available: None
+  daemon._disconnect_camera = lambda: None
+  daemon._log = lambda *args, **kwargs: None
+  return daemon
+
+
+def daemon_for_stability():
+  daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
+  daemon.sm = FakeSM(healthy=True)
+  daemon._ready = True
+  daemon._model_ready = True
+  daemon._available = False
+  daemon._tripped_for_drive = False
+  daemon._trip_reason = ""
+  daemon._onroad_since = 100.0
+  daemon._stack_healthy_since = 0.0
+  daemon._set_inactive = lambda reset=False: None
+  daemon._disconnect_camera = lambda: None
+  daemon._log = lambda *args, **kwargs: None
+  daemon.params_memory = type("FakeParams", (), {
+    "put_bool": lambda *args, **kwargs: None,
+    "put": lambda *args, **kwargs: None,
+  })()
+  return daemon
+
+
+def test_extreme_latency_immediately_trips_for_drive():
+  daemon = daemon_for_guard()
+  daemon._record_latency(LATENCY_TRIP_MS, 100.0)
+  assert daemon._tripped_for_drive
+  assert daemon._trip_reason == "inference_latency"
+  assert daemon._cooldown_count == 1
+
+
+def test_recovery_prevents_sporadic_slow_samples_from_tripping():
+  daemon = daemon_for_guard()
+  for _ in range(MAX_SLOW_INFERENCES - 1):
+    daemon._record_latency(LATENCY_TRIP_MS - 1.0, 100.0)
+  daemon._record_latency(20.0, 101.0)
+  assert not daemon._tripped_for_drive
+
+
+def test_sustained_cpu_pressure_trips_for_drive():
+  daemon = daemon_for_guard()
+  usage = [95.0] * 8
+  assert not daemon._cpu_guard_tripped(usage, 100.0)
+  assert daemon._cpu_guard_tripped(usage, 100.0 + CPU_TRIP_SECONDS)
+  assert daemon._tripped_for_drive
+  assert daemon._trip_reason == "cpu_pressure"
+  assert daemon._cooldown_count == 1
+
+
+def test_brief_cpu_spike_recovers_without_cooldown():
+  daemon = daemon_for_guard()
+  assert not daemon._cpu_guard_tripped([95.0] * 8, 100.0)
+  assert not daemon._cpu_guard_tripped([20.0] * 8, 100.5)
+  assert daemon._cpu_overload_since == 0.0
+
+
+def test_inference_requires_healthy_driving_stack_and_cpu_headroom():
+  daemon = daemon_for_guard()
+  daemon.sm = FakeSM(healthy=True)
+  daemon._last_resource_skip_log = 0.0
+  daemon._cpu_usage = lambda: [25.0] * 8
+  assert daemon._resources_allow_inference(100.0)
+
+  daemon.sm = FakeSM(healthy=False)
+  assert not daemon._resources_allow_inference(100.0)
+
+
+def test_offroad_bench_inference_does_not_require_driving_stack():
+  daemon = daemon_for_guard()
+  daemon.sm = FakeSM(healthy=False)
+  daemon._last_resource_skip_log = 0.0
+  daemon._cpu_usage = lambda: [25.0] * 8
+  assert daemon._resources_allow_inference(100.0, require_driving_stack=False)
+
+
+def test_offroad_bench_still_requires_cpu_headroom():
+  daemon = daemon_for_guard()
+  daemon.sm = FakeSM(healthy=False)
+  daemon._last_resource_skip_log = 0.0
+  daemon._cpu_usage = lambda: [95.0, 95.0, 95.0, 95.0, 10.0, 10.0, 10.0, 10.0]
+  assert not daemon._resources_allow_inference(100.0, require_driving_stack=False)
+
+
+def test_inference_skips_when_multiple_cores_are_hot():
+  daemon = daemon_for_guard()
+  daemon.sm = FakeSM(healthy=True)
+  daemon._last_resource_skip_log = 0.0
+  daemon._cpu_usage = lambda: [95.0, 95.0, 95.0, 95.0, 10.0, 10.0, 10.0, 10.0]
+  assert not daemon._resources_allow_inference(100.0)
+
+
+def test_stack_must_be_continuously_healthy_after_startup_delay():
+  daemon = daemon_for_stability()
+  first_eligible = 100.0 + ONROAD_STARTUP_DELAY
+  assert not daemon._update_stack_stability(True, first_eligible)
+  assert not daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS - 0.1)
+  assert daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS)
+  assert daemon._available
+
+
+def test_health_regression_after_availability_trips_for_drive():
+  daemon = daemon_for_stability()
+  first_eligible = 100.0 + ONROAD_STARTUP_DELAY
+  daemon._update_stack_stability(True, first_eligible)
+  assert daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS)
+  daemon.sm = FakeSM(healthy=False)
+  assert not daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS + 0.1)
+  assert daemon._tripped_for_drive
+  assert daemon._trip_reason == "critical_service_regression"
+
+
+def test_startup_health_timeout_fails_closed_for_drive():
+  daemon = daemon_for_stability()
+  daemon.sm = FakeSM(healthy=False)
+  assert not daemon._update_stack_stability(True, 100.0 + DRIVING_STACK_STARTUP_TIMEOUT - 0.1)
+  assert not daemon._tripped_for_drive
+  assert not daemon._update_stack_stability(True, 100.0 + DRIVING_STACK_STARTUP_TIMEOUT)
+  assert daemon._tripped_for_drive
+  assert daemon._trip_reason == "critical_service_startup_timeout"
+
+
+def test_model_initialization_stages_have_a_cooldown():
+  assert MODEL_STAGE_COOLDOWN > 0.0
+
+
+def test_stack_can_stabilize_before_model_is_ready_for_deferred_loading():
+  daemon = daemon_for_stability()
+  daemon._ready = False
+  first_eligible = 100.0 + ONROAD_STARTUP_DELAY
+  assert not daemon._update_stack_stability(True, first_eligible)
+  assert daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS)
+  assert not daemon._available
+
+
+def test_offroad_never_reports_bsm_available():
+  daemon = daemon_for_stability()
+  daemon._available = True
+  assert not daemon._update_stack_stability(False, 200.0)
+  assert not daemon._available
