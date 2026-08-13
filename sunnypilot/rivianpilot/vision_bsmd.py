@@ -38,6 +38,8 @@ FOLLOWUP_COOLDOWN = 2.0
 CANDIDATE_CONFIDENCE_RATIO = 0.70
 ONROAD_STARTUP_DELAY = 20.0
 DRIVING_STACK_STABLE_SECONDS = 15.0
+DRIVING_STACK_STARTUP_TIMEOUT = 45.0
+MODEL_STAGE_COOLDOWN = 5.0
 PARAM_REFRESH_INTERVAL = 2.0
 STATUS_LOG_INTERVAL = 30.0
 ERROR_LOG_INTERVAL = 30.0
@@ -56,7 +58,7 @@ BUSY_AVG_CPU_PERCENT = 74.0
 BUSY_HOT_CORE_COUNT = 4
 CRITICAL_SERVICES = ("modelV2", "liveCalibration", "driverMonitoringState", "longitudinalPlan", "livePose")
 ESSENTIAL_LOG_ACTIONS = {
-  "started", "model_ready", "model_load_failed", "ready", "not_ready",
+  "started", "model_loaded", "model_ready", "model_load_failed", "model_warmup_failed", "ready", "not_ready",
   "available", "unavailable", "onroad_started", "offroad_started",
   "tripped_for_drive", "resource_skip",
 }
@@ -137,6 +139,8 @@ class VisionBSMDaemon:
     self._last_resource_skip_log = 0.0
     self._onroad_since = 0.0
     self._stack_healthy_since = 0.0
+    self._model_stage_at = 0.0
+    self._model_warmup_pending = False
     self._last_onroad = False
     self._tripped_for_drive = False
     self._trip_reason = ""
@@ -223,7 +227,7 @@ class VisionBSMDaemon:
       self.params_memory.put("RivianPilotVisionBSMReadyHeartbeat", 0.0)
     self._log("available" if available else "unavailable")
 
-  def _load_and_warm_model(self, context: str) -> bool:
+  def _load_model(self, context: str, now: float) -> bool:
     if self._model_load_attempted:
       return self._model_ready
     self._model_load_attempted = True
@@ -231,12 +235,33 @@ class VisionBSMDaemon:
     load_started = time.monotonic()
     model_loaded = self.inference.load()
     load_ms = (time.monotonic() - load_started) * 1000.0
-    warmup_ok, warmup_ms = self.inference.warmup() if model_loaded else (False, 0.0)
-    self._model_ready = bool(model_loaded and warmup_ok)
+    self._model_warmup_pending = bool(model_loaded)
+    self._model_stage_at = now
+    self._model_ready = False
     self._update_ready_state()
     resources_after = _memory_snapshot()
-    self._log("model_ready" if self._model_ready else "model_load_failed", context=context,
-              load_ms=load_ms, warmup_ms=warmup_ms, model_error=self.inference.last_error,
+    self._log("model_loaded" if model_loaded else "model_load_failed", context=context,
+              load_ms=load_ms, model_error=self.inference.last_error,
+              backend=self.inference.backend,
+              rss_before_mb=resources_before["rss_mb"], rss_after_mb=resources_after["rss_mb"],
+              rss_delta_mb=round(float(resources_after["rss_mb"]) - float(resources_before["rss_mb"]), 1),
+              threads_before=resources_before["threads"], threads_after=resources_after["threads"],
+              memory_available_mb=resources_after["memory_available_mb"],
+              cpu_topology=_cpu_topology())
+    return model_loaded
+
+  def _warm_model(self, context: str, now: float) -> bool:
+    if not self._model_warmup_pending or now - self._model_stage_at < MODEL_STAGE_COOLDOWN:
+      return self._model_ready
+    resources_before = _memory_snapshot()
+    warmup_ok, warmup_ms = self.inference.warmup()
+    self._model_warmup_pending = False
+    self._model_stage_at = now
+    self._model_ready = bool(warmup_ok)
+    self._update_ready_state()
+    resources_after = _memory_snapshot()
+    self._log("model_ready" if self._model_ready else "model_warmup_failed", context=context,
+              warmup_ms=warmup_ms, model_error=self.inference.last_error,
               backend=self.inference.backend,
               rss_before_mb=resources_before["rss_mb"], rss_after_mb=resources_after["rss_mb"],
               rss_delta_mb=round(float(resources_after["rss_mb"]) - float(resources_before["rss_mb"]), 1),
@@ -306,7 +331,7 @@ class VisionBSMDaemon:
     self._last_onroad = onroad
 
   def _update_stack_stability(self, onroad: bool, now: float) -> bool:
-    if not onroad or not self._ready or self._tripped_for_drive:
+    if not onroad or self._tripped_for_drive:
       self._stack_healthy_since = 0.0
       self._set_available(False)
       return False
@@ -315,6 +340,9 @@ class VisionBSMDaemon:
     if not healthy:
       if self._available:
         self._trip_for_drive("critical_service_regression")
+      elif self._model_ready and onroad_age >= DRIVING_STACK_STARTUP_TIMEOUT:
+        self._trip_for_drive("critical_service_startup_timeout",
+                             unhealthy_services=self._unhealthy_driving_services())
       else:
         self._stack_healthy_since = 0.0
         self._set_available(False)
@@ -322,8 +350,14 @@ class VisionBSMDaemon:
     if self._stack_healthy_since <= 0.0:
       self._stack_healthy_since = now
     stable = now - self._stack_healthy_since >= DRIVING_STACK_STABLE_SECONDS
-    self._set_available(stable)
+    self._set_available(stable and bool(self._ready))
     return stable
+
+  def _unhealthy_driving_services(self) -> list[str]:
+    return [service for service in CRITICAL_SERVICES
+            if not self.sm.valid.get(service, False)
+            or not self.sm.alive.get(service, False)
+            or not self.sm.freq_ok.get(service, False)]
 
   def _maybe_log_status(self, now: float, onroad: bool) -> None:
     if now - self._last_status_log < STATUS_LOG_INTERVAL:
@@ -579,12 +613,19 @@ class VisionBSMDaemon:
         stack_stable = self._update_stack_stability(onroad, now)
         self._maybe_log_status(now, onroad)
 
-        # Loading and warm-up are intentionally off-road only. Starting the
-        # OpenCV graph competes for CPU and memory, so a device that was not
-        # prepared before ignition leaves BSM unavailable for the whole drive.
-        if self._enabled and not self._model_load_attempted:
-          if device_state_valid and not onroad:
-            self._load_and_warm_model("offroad")
+        # Initialize in two bounded stages. Off-road may begin immediately. If
+        # the driver starts first, defer both stages until the driving stack has
+        # been continuously healthy and CPU headroom is available. BSM remains
+        # unavailable during this work; driving services always take priority.
+        initialization_allowed = (device_state_valid and not onroad) or (onroad and stack_stable)
+        require_driving_stack = bool(onroad)
+        if self._enabled and initialization_allowed:
+          if not self._model_load_attempted and self._resources_allow_inference(
+              now, require_driving_stack=require_driving_stack):
+            self._load_model("onroad_deferred" if onroad else "offroad", now)
+          elif self._model_warmup_pending and self._resources_allow_inference(
+              now, require_driving_stack=require_driving_stack):
+            self._warm_model("onroad_deferred" if onroad else "offroad", now)
 
         active_context = onroad or self._bench_mode
         if (not active_context or not self._enabled or not self._ready or not self.inference.valid or

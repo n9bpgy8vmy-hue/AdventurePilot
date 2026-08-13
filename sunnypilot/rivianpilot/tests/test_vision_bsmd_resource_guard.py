@@ -11,6 +11,8 @@ from openpilot.sunnypilot.rivianpilot.vision_bsmd import (
   FOLLOWUP_WINDOW,
   LATENCY_TRIP_MS,
   MAX_SLOW_INFERENCES,
+  DRIVING_STACK_STARTUP_TIMEOUT,
+  MODEL_STAGE_COOLDOWN,
   ONROAD_STARTUP_DELAY,
   VisionBSMDaemon,
 )
@@ -84,6 +86,7 @@ def daemon_for_stability():
   daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
   daemon.sm = FakeSM(healthy=True)
   daemon._ready = True
+  daemon._model_ready = True
   daemon._available = False
   daemon._tripped_for_drive = False
   daemon._trip_reason = ""
@@ -185,6 +188,29 @@ def test_health_regression_after_availability_trips_for_drive():
   assert not daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS + 0.1)
   assert daemon._tripped_for_drive
   assert daemon._trip_reason == "critical_service_regression"
+
+
+def test_startup_health_timeout_fails_closed_for_drive():
+  daemon = daemon_for_stability()
+  daemon.sm = FakeSM(healthy=False)
+  assert not daemon._update_stack_stability(True, 100.0 + DRIVING_STACK_STARTUP_TIMEOUT - 0.1)
+  assert not daemon._tripped_for_drive
+  assert not daemon._update_stack_stability(True, 100.0 + DRIVING_STACK_STARTUP_TIMEOUT)
+  assert daemon._tripped_for_drive
+  assert daemon._trip_reason == "critical_service_startup_timeout"
+
+
+def test_model_initialization_stages_have_a_cooldown():
+  assert MODEL_STAGE_COOLDOWN > 0.0
+
+
+def test_stack_can_stabilize_before_model_is_ready_for_deferred_loading():
+  daemon = daemon_for_stability()
+  daemon._ready = False
+  first_eligible = 100.0 + ONROAD_STARTUP_DELAY
+  assert not daemon._update_stack_stability(True, first_eligible)
+  assert daemon._update_stack_stability(True, first_eligible + DRIVING_STACK_STABLE_SECONDS)
+  assert not daemon._available
 
 
 def test_offroad_never_reports_bsm_available():
