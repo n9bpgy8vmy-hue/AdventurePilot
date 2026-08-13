@@ -39,6 +39,13 @@ class VisionBSMInference:
     self.config_height = 0
     self.masks = {"left": None, "right": None}
     self.bboxes = {"left": None, "right": None, "left_raw": None, "right_raw": None}
+    self.nv12_crops = {"left": None, "right": None}
+    self.rgb_crops = {"left": None, "right": None}
+    self.masked_crops = {"left": None, "right": None}
+    self.resized_crops = {"left": None, "right": None}
+    self.input_blobs = {"left": None, "right": None}
+    self.last_timing_ms = {"window_copy": 0.0, "color_mask": 0.0,
+                           "resize_blob": 0.0, "forward": 0.0, "total": 0.0}
     self.reset_state()
 
   def load(self) -> bool:
@@ -117,6 +124,11 @@ class VisionBSMInference:
       if raw_points is None:
         self.bboxes[side] = None
         self.masks[side] = None
+        self.nv12_crops[side] = None
+        self.rgb_crops[side] = None
+        self.masked_crops[side] = None
+        self.resized_crops[side] = None
+        self.input_blobs[side] = None
         continue
 
       points = raw_points.copy()
@@ -133,23 +145,52 @@ class VisionBSMInference:
       mask = np.zeros((h, w), dtype=np.uint8)
       cv2.fillPoly(mask, [points.astype(np.int32) - [x, y]], 255)
       self.masks[side] = mask
+      # Reuse the fixed-size crop and preprocessing buffers. Only the selected
+      # side-window region is copied from VisionIPC; the full camera frame is
+      # never materialized by this observer.
+      self.nv12_crops[side] = np.empty((h * 3 // 2, w), dtype=np.uint8)
+      self.rgb_crops[side] = np.empty((h, w, 3), dtype=np.uint8)
+      self.masked_crops[side] = np.empty((h, w, 3), dtype=np.uint8)
+      self.resized_crops[side] = np.empty((MODEL_INPUT_H, MODEL_INPUT_W, 3), dtype=np.uint8)
+      self.input_blobs[side] = np.empty((1, 3, MODEL_INPUT_H, MODEL_INPUT_W), dtype=np.float32)
 
   def _run_inference(self, raw_image, camera_height: int, side: str) -> float:
     bbox = self.bboxes[side]
     if bbox is None or self.net is None:
       return 0.0
+    started = time.perf_counter()
     x, y, w, h = bbox
-    y_crop = raw_image[y:y + h, x:x + w]
-    uv_crop = raw_image[camera_height + y // 2:camera_height + (y + h) // 2, x:x + w]
-    nv12_crop = np.vstack([y_crop, uv_crop])
-    crop_rgb = cv2.cvtColor(nv12_crop, cv2.COLOR_YUV2RGB_NV12)
+    nv12_crop = self.nv12_crops[side]
+    rgb_crop = self.rgb_crops[side]
+    masked_crop = self.masked_crops[side]
+    resized = self.resized_crops[side]
+    blob = self.input_blobs[side]
+    if nv12_crop is None or rgb_crop is None or masked_crop is None or resized is None or blob is None:
+      return 0.0
+    nv12_crop[:h] = raw_image[y:y + h, x:x + w]
+    nv12_crop[h:] = raw_image[camera_height + y // 2:camera_height + (y + h) // 2, x:x + w]
+    copied = time.perf_counter()
+    cv2.cvtColor(nv12_crop, cv2.COLOR_YUV2RGB_NV12, dst=rgb_crop)
     if self.masks[side] is not None:
-      crop_rgb = cv2.bitwise_and(crop_rgb, crop_rgb, mask=self.masks[side])
+      masked_crop.fill(0)
+      cv2.bitwise_and(rgb_crop, rgb_crop, dst=masked_crop, mask=self.masks[side])
+    else:
+      np.copyto(masked_crop, rgb_crop)
 
-    resized = cv2.resize(crop_rgb, (MODEL_INPUT_W, MODEL_INPUT_H), interpolation=cv2.INTER_LINEAR)
-    blob = np.expand_dims(np.transpose(resized.astype(np.float32) / 255.0, (2, 0, 1)), axis=0)
+    converted = time.perf_counter()
+    cv2.resize(masked_crop, (MODEL_INPUT_W, MODEL_INPUT_H), dst=resized, interpolation=cv2.INTER_LINEAR)
+    np.multiply(resized.transpose(2, 0, 1), np.float32(1.0 / 255.0), out=blob[0], casting="unsafe")
+    prepared = time.perf_counter()
     self.net.setInput(blob)
     predictions = np.squeeze(self.net.forward())
+    finished = time.perf_counter()
+    self.last_timing_ms = {
+      "window_copy": (copied - started) * 1000.0,
+      "color_mask": (converted - copied) * 1000.0,
+      "resize_blob": (prepared - converted) * 1000.0,
+      "forward": (finished - prepared) * 1000.0,
+      "total": (finished - started) * 1000.0,
+    }
     if predictions.ndim == 2:
       if predictions.shape[0] < predictions.shape[1]:
         predictions = predictions.T

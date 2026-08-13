@@ -34,6 +34,7 @@ from openpilot.system.hardware import PC
 BASE_INTERVAL = 1.000
 FOLLOWUP_INTERVAL = 0.500
 FOLLOWUP_WINDOW = 1.5
+FOLLOWUP_COOLDOWN = 2.0
 CANDIDATE_CONFIDENCE_RATIO = 0.70
 ONROAD_STARTUP_DELAY = 20.0
 DRIVING_STACK_STABLE_SECONDS = 15.0
@@ -144,10 +145,12 @@ class VisionBSMDaemon:
     self.last_inference_by_side = {"left": 0.0, "right": 0.0}
     self.current_side = "left"
     self.followup_until = 0.0
+    self.followup_cooldown_until = 0.0
     self._last_param_refresh = 0.0
     self._last_status_log = 0.0
     self._last_error_log = 0.0
     self._inference_count = 0
+    self._status_window_started = time.monotonic()
     self._last_latency_ms = 0.0
     self._throttle_factor = 1.0
     self._throttle_filtered = 1.0
@@ -327,11 +330,16 @@ class VisionBSMDaemon:
       return
     cpu = self._cpu_usage()
     memory = _memory_snapshot()
+    status_elapsed = max(now - self._status_window_started, 0.001)
+    timing = self.inference.last_timing_ms
     self._log("status", onroad=onroad, ready=bool(self._ready), model_ready=self._model_ready,
               tripped_for_drive=self._tripped_for_drive, trip_reason=self._trip_reason,
               available=self._available,
               requested_camera_side=self._requested_side or "none",
               inference_count=self._inference_count, latency_ms=self._last_latency_ms,
+              effective_fps=self._inference_count / status_elapsed,
+              window_copy_ms=timing["window_copy"], color_mask_ms=timing["color_mask"],
+              resize_blob_ms=timing["resize_blob"], forward_ms=timing["forward"],
               throttle_factor=self._throttle_factor,
               cpu_average=(sum(cpu) / len(cpu) if cpu else 0.0),
               rss_mb=memory["rss_mb"], process_threads=memory["threads"],
@@ -340,6 +348,7 @@ class VisionBSMDaemon:
               left_confidence=self.inference.confidence["left"],
               right_confidence=self.inference.confidence["right"])
     self._inference_count = 0
+    self._status_window_started = now
     self._last_status_log = now
 
   def _load_annotation_config(self) -> bool:
@@ -423,6 +432,13 @@ class VisionBSMDaemon:
     confidence = float(self.inference.confidence.get(side, 0.0))
     return confidence >= self._confidence_threshold * CANDIDATE_CONFIDENCE_RATIO
 
+  def _request_followup(self, now: float) -> None:
+    """Start one bounded confirmation burst; candidates cannot extend it forever."""
+    if now < self.followup_until or now < self.followup_cooldown_until:
+      return
+    self.followup_until = now + FOLLOWUP_WINDOW
+    self.followup_cooldown_until = self.followup_until + FOLLOWUP_COOLDOWN
+
   def _cpu_guard_tripped(self, usage: list[float], now: float) -> bool:
     """Trip only for sustained system-wide pressure; brief spikes only throttle."""
     if not usage:
@@ -466,6 +482,7 @@ class VisionBSMDaemon:
     if reset:
       self.inference.reset_state()
       self.followup_until = 0.0
+      self.followup_cooldown_until = 0.0
       self.last_inference_at = 0.0
     inactive_values = (False, False, 0.0, 0.0)
     if self._last_update_at != 0.0 or self._last_published != inactive_values:
@@ -526,7 +543,7 @@ class VisionBSMDaemon:
 
   @staticmethod
   def _decode_nv12_frame(data, width: int, height: int, stride: int) -> np.ndarray:
-    """Return a tightly cropped NV12 frame or reject malformed camera metadata/data."""
+    """Return a zero-copy padded NV12 view or reject malformed camera data."""
     if data is None:
       raise ValueError("camera buffer data is missing")
     if width <= 0 or height <= 0 or stride <= 0:
@@ -542,11 +559,10 @@ class VisionBSMDaemon:
     if byte_count < expected_bytes:
       raise ValueError(f"short camera buffer bytes={byte_count} expected={expected_bytes}")
 
-    # VisionIPC buffers may contain trailing alignment bytes. Decode only the
-    # declared NV12 image and remove per-row padding before inference.
+    # Keep the VisionIPC row stride and expose a zero-copy view. Inference then
+    # copies only the selected side-window rectangle into its reusable buffer.
     flat = np.frombuffer(data, dtype=np.uint8, count=expected_bytes)
-    padded = flat.reshape((expected_rows, stride))
-    return np.ascontiguousarray(padded[:, :width])
+    return flat.reshape((expected_rows, stride))
 
   def run(self) -> None:
     rk = Ratekeeper(10, None)
@@ -664,7 +680,7 @@ class VisionBSMDaemon:
         self._inference_count += 1
         self._publish(left, right, self.inference.confidence["left"], self.inference.confidence["right"], now)
         if self._candidate_detected(requested_side):
-          self.followup_until = now + FOLLOWUP_WINDOW
+          self._request_followup(now)
         if self._bench_mode and not onroad:
           sides = self.inference.configured_sides
           if sides:

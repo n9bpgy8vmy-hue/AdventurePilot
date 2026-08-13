@@ -1,3 +1,5 @@
+import numpy as np
+
 from openpilot.sunnypilot.rivianpilot.vision_bsmd import (
   BASE_INTERVAL,
   CANDIDATE_CONFIDENCE_RATIO,
@@ -5,6 +7,8 @@ from openpilot.sunnypilot.rivianpilot.vision_bsmd import (
   CPU_TRIP_SECONDS,
   DRIVING_STACK_STABLE_SECONDS,
   FOLLOWUP_INTERVAL,
+  FOLLOWUP_COOLDOWN,
+  FOLLOWUP_WINDOW,
   LATENCY_TRIP_MS,
   MAX_SLOW_INFERENCES,
   ONROAD_STARTUP_DELAY,
@@ -27,6 +31,32 @@ def test_candidate_detection_uses_sub_threshold_confidence_only_for_scheduling()
   assert not daemon._candidate_detected("left")
   daemon.inference.confidence["left"] = 0.8 * CANDIDATE_CONFIDENCE_RATIO
   assert daemon._candidate_detected("left")
+
+
+def test_candidate_confirmation_burst_is_bounded_and_has_cooldown():
+  daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
+  daemon.followup_until = 0.0
+  daemon.followup_cooldown_until = 0.0
+  daemon._request_followup(100.0)
+  assert daemon.followup_until == 100.0 + FOLLOWUP_WINDOW
+  assert daemon.followup_cooldown_until == 100.0 + FOLLOWUP_WINDOW + FOLLOWUP_COOLDOWN
+
+  daemon._request_followup(101.0)
+  assert daemon.followup_until == 100.0 + FOLLOWUP_WINDOW
+  daemon._request_followup(102.0)
+  assert daemon.followup_until == 100.0 + FOLLOWUP_WINDOW
+  daemon._request_followup(104.0)
+  assert daemon.followup_until == 104.0 + FOLLOWUP_WINDOW
+
+
+def test_nv12_decoder_returns_zero_copy_padded_view():
+  width, height, stride = 4, 4, 8
+  raw = bytearray(range(height * 3 // 2 * stride))
+  image = VisionBSMDaemon._decode_nv12_frame(raw, width, height, stride)
+  assert image.shape == (height * 3 // 2, stride)
+  assert np.shares_memory(image, np.frombuffer(raw, dtype=np.uint8))
+  raw[0] = 255
+  assert image[0, 0] == 255
 
 
 class FakeSM:
