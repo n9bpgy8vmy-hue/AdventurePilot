@@ -28,9 +28,13 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import PC
 
 
+# The observer is completely idle without a single active blinker. While a
+# blinker is active, sample at 1 Hz and briefly confirm candidates at 2 Hz.
+# Promote to 2/5 Hz only after clean on-road resource data.
 BASE_INTERVAL = 1.000
-FOLLOWUP_INTERVAL = 1.000
+FOLLOWUP_INTERVAL = 0.500
 FOLLOWUP_WINDOW = 1.5
+CANDIDATE_CONFIDENCE_RATIO = 0.70
 ONROAD_STARTUP_DELAY = 20.0
 DRIVING_STACK_STABLE_SECONDS = 15.0
 PARAM_REFRESH_INTERVAL = 2.0
@@ -414,6 +418,11 @@ class VisionBSMDaemon:
     self._throttle_factor = self._cpu_throttle_factor()
     return base * self._throttle_factor
 
+  def _candidate_detected(self, side: str) -> bool:
+    """Use a sub-threshold candidate only to request brief confirmation samples."""
+    confidence = float(self.inference.confidence.get(side, 0.0))
+    return confidence >= self._confidence_threshold * CANDIDATE_CONFIDENCE_RATIO
+
   def _cpu_guard_tripped(self, usage: list[float], now: float) -> bool:
     """Trip only for sustained system-wide pressure; brief spikes only throttle."""
     if not usage:
@@ -654,7 +663,7 @@ class VisionBSMDaemon:
           continue
         self._inference_count += 1
         self._publish(left, right, self.inference.confidence["left"], self.inference.confidence["right"], now)
-        if left or right:
+        if self._candidate_detected(requested_side):
           self.followup_until = now + FOLLOWUP_WINDOW
         if self._bench_mode and not onroad:
           sides = self.inference.configured_sides

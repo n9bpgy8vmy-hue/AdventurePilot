@@ -1,5 +1,6 @@
 from openpilot.sunnypilot.rivianpilot.vision_bsmd import (
   BASE_INTERVAL,
+  CANDIDATE_CONFIDENCE_RATIO,
   CRITICAL_SERVICES,
   CPU_TRIP_SECONDS,
   DRIVING_STACK_STABLE_SECONDS,
@@ -11,9 +12,21 @@ from openpilot.sunnypilot.rivianpilot.vision_bsmd import (
 )
 
 
-def test_opencv_observer_is_capped_at_one_fps():
+def test_opencv_observer_uses_one_hz_resting_and_two_hz_confirmation():
   assert BASE_INTERVAL == 1.0
-  assert FOLLOWUP_INTERVAL == BASE_INTERVAL
+  assert FOLLOWUP_INTERVAL == 0.5
+  assert FOLLOWUP_INTERVAL < BASE_INTERVAL
+
+
+def test_candidate_detection_uses_sub_threshold_confidence_only_for_scheduling():
+  daemon = VisionBSMDaemon.__new__(VisionBSMDaemon)
+  daemon._confidence_threshold = 0.8
+  daemon.inference = type("FakeInference", (), {"confidence": {"left": 0.0, "right": 0.0}})()
+
+  daemon.inference.confidence["left"] = 0.8 * CANDIDATE_CONFIDENCE_RATIO - 0.001
+  assert not daemon._candidate_detected("left")
+  daemon.inference.confidence["left"] = 0.8 * CANDIDATE_CONFIDENCE_RATIO
+  assert daemon._candidate_detected("left")
 
 
 class FakeSM:

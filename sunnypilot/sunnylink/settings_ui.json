@@ -247,7 +247,7 @@
                   "key": "RivianPilotVisionBSMEnabled",
                   "widget": "toggle",
                   "title": "Vision Blind-Spot Observer",
-                  "description": "Experimental observation only. Runs the StarPilot-compatible driver-camera detector without alerts, lane-change blocking, steering changes, or vehicle-control changes.",
+                  "description": "Experimental observation and alert only. Uses the active-blinker side-window mask at 1 FPS, briefly confirms candidates at up to 2 FPS, and automatically slows or disables itself under system load. It never changes steering or vehicle controls.",
                   "visibility": [
                     {
                       "type": "capability",
