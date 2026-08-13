@@ -269,7 +269,12 @@ def test_center_corrects_model_bias_on_straight_road():
     "RivianPilotLanePositionPreference": 1,
     "RivianPilotCenterCorrectionInches": 4,
   }))
-  establish_straight(feature, model(path_y=10 * 0.0254))
+  road_model = model(path_y=10 * 0.0254)
+  controls = SimpleNamespace(desiredCurvature=0.0)
+  initial_path_y = float(road_model.position.y[0])
+  for i in range(30):
+    road_model.position.y = [initial_path_y - feature.automatic_output] * len(road_model.position.y)
+    feature.update(car_state(), True, road_model, controls, now=1.0 + i * 0.2)
   assert abs(feature.last_output - 4 * 0.0254) < 1e-9
 
 
@@ -585,6 +590,7 @@ def test_nudge_uses_configured_threshold_logs_peak_and_activates_after_release()
   assert feature.nudge_direction == 1
   assert feature.last_output == 3 * 0.0254
   feature._log.assert_any_call("nudge_started", direction=1, hold_seconds=10,
+                               magnitude_inches=3,
                                trigger_peak_torque=1.1, configured_torque_threshold=0.7,
                                activation_after_release=True, cancellation_grace_seconds=0.5)
 
@@ -873,7 +879,7 @@ def test_diagnostic_failure_does_not_disable_lane_position(mocker):
   assert feature.last_output == 0.0
 
 
-def test_blinker_cancels_offset():
+def test_blinker_smoothly_hands_offset_to_native_lane_change():
   p = params()
   feature = LanePositionController(p)
   cs = car_state()
@@ -881,7 +887,64 @@ def test_blinker_cancels_offset():
   assert feature.last_output != 0.0
   cs.leftBlinker = True
   feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.002), now=2.6)
+  assert 0.0 < feature.last_output < 3 * 0.0254
+  previous = feature.last_output
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.002), now=2.8)
+  assert 0.0 <= feature.last_output < previous
+
+
+def test_native_lane_change_suppresses_all_custom_offsets_and_does_not_restore_nudge():
+  feature = LanePositionController(params({"RivianPilotNudgeOffsetInches": 5}))
+  cs = car_state()
+  feature.nudge_direction = 1
+  feature.nudge_magnitude_inches = 5
+  feature.nudge_until = 20.0
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.0), now=1.0)
+  assert feature.last_output == 5 * 0.0254
+  lane_change_model = model()
+  lane_change_model.meta = SimpleNamespace(laneChangeState=2)
+  feature.update(cs, True, lane_change_model, SimpleNamespace(desiredCurvature=0.0), now=1.2)
+  assert feature.lane_change_suppressed
+  assert feature.nudge_direction == 0
+  assert 0.0 < feature.last_output < 5 * 0.0254
+
+
+def _physical_nudge(feature, cs, direction, now):
+  cs.steeringPressed = True
+  cs.steeringTorque = direction * 1.0
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.0), now=now)
+  cs.steeringPressed = False
+  cs.steeringTorque = 0.0
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.0), now=now + 0.2)
+
+
+def test_opposite_nudge_neutralizes_before_reversing_and_same_direction_stacks():
+  feature = LanePositionController(params({"RivianPilotNudgeOffsetInches": 5}))
+  cs = car_state()
+  _physical_nudge(feature, cs, 1, 1.0)
+  assert feature.nudge_direction == 1
+  assert feature.nudge_magnitude_inches == 5
+  _physical_nudge(feature, cs, 1, 2.0)
+  assert feature.nudge_direction == 1
+  assert feature.nudge_magnitude_inches == 6
+  _physical_nudge(feature, cs, -1, 3.0)
+  assert feature.nudge_direction == 0
   assert feature.last_output == 0.0
+  _physical_nudge(feature, cs, -1, 4.0)
+  assert feature.nudge_direction == -1
+  assert feature.nudge_magnitude_inches == 5
+
+
+def test_first_nudge_remains_authoritative_but_increment_requires_geometry():
+  feature = LanePositionController(params({"RivianPilotNudgeOffsetInches": 5}))
+  cs = car_state()
+  _physical_nudge(feature, cs, 1, 1.0)
+  feature.update(cs, True, model(probability=0.0), SimpleNamespace(desiredCurvature=0.0), now=1.4)
+  assert feature.last_output == 5 * 0.0254
+  _physical_nudge(feature, cs, 1, 2.0)
+  feature.update(cs, True, model(probability=0.0), SimpleNamespace(desiredCurvature=0.0), now=2.4)
+  assert feature.nudge_magnitude_inches == 6
+  assert feature.last_output == 5 * 0.0254
 
 
 def test_runtime_failure_falls_back_to_zero_and_stops_heartbeat():

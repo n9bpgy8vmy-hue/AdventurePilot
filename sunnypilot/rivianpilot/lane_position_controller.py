@@ -46,8 +46,14 @@ CURVE_RAMP_OUT_MPS = 8.0 * INCH_TO_M
 # frame to frame; feeding that noise directly back through CameraOffset feels
 # like a slow left/right weave at larger correction limits.
 CENTER_ERROR_FILTER_TAU_S = 1.5
-CENTER_ERROR_DEADBAND_M = 0.75 * INCH_TO_M
+CENTER_ERROR_DEADBAND_M = 1.0 * INCH_TO_M
 CENTER_REVERSAL_STABLE_SECONDS = 1.5
+CENTER_TARGET_STEP_M = 0.5 * INCH_TO_M
+CENTER_TARGET_STABLE_SECONDS = 1.5
+CENTER_TARGET_HOLD_SECONDS = 1.0
+LANE_CHANGE_BLINKER_LATCH_SECONDS = 2.5
+LANE_CHANGE_RECOVERY_SECONDS = 1.0
+LANE_CHANGE_HANDOFF_MPS = 6.0 * INCH_TO_M
 STRAIGHT_CENTER_RAMP_LOW_SPEED_IN_MPS = 2.0 * INCH_TO_M
 STRAIGHT_CENTER_RAMP_HIGH_SPEED_IN_MPS = 1.0 * INCH_TO_M
 PREDICTIVE_LOOKAHEAD_START_S = 0.5
@@ -102,6 +108,7 @@ class LanePositionController:
     self.last_sample_log = 0.0
     self.last_output = None
     self.nudge_direction = 0
+    self.nudge_magnitude_inches = 0
     self.nudge_until = 0.0
     self.nudge_started_at = 0.0
     self.last_nudge_timer_second = None
@@ -113,6 +120,7 @@ class LanePositionController:
     self.pending_nudge_direction = 0
     self.pending_nudge_relatched = False
     self.pending_nudge_peak_torque = 0.0
+    self.pending_nudge_action = "none"
     self.nudge_trigger_peak_torque = 0.0
     self.curve_active = False
     self.curve_direction = 0
@@ -131,6 +139,15 @@ class LanePositionController:
     self.center_output_direction = 0
     self.center_reversal_direction = 0
     self.center_reversal_since = 0.0
+    self.center_target = 0.0
+    self.center_candidate = 0.0
+    self.center_candidate_since = 0.0
+    self.center_target_changed_at = 0.0
+    self.lane_change_suppressed = False
+    self.lane_change_blinker_until = 0.0
+    self.lane_change_recovery_since = 0.0
+    self.lane_change_handoff_output = 0.0
+    self.last_lane_change_log = 0.0
     self.faulted = False
     self.error_logged = False
     self.log_failure_count = 0
@@ -225,6 +242,82 @@ class LanePositionController:
     self.center_reversal_direction = 0
     self.center_reversal_since = 0.0
 
+  def _clear_center_target(self) -> None:
+    self.center_target = 0.0
+    self.center_candidate = 0.0
+    self.center_candidate_since = 0.0
+    self.center_target_changed_at = 0.0
+
+  def _stepped_center_correction(self, correction: float, now: float) -> tuple[float, str]:
+    """Accept persistent lane-center error in half-inch steps and hold it."""
+    correction, stability = self._stable_center_correction(correction, now)
+    if stability in ("reversal_wait", "reversal_zero_crossing"):
+      return self.center_target, stability
+    if abs(correction) < CENTER_ERROR_DEADBAND_M:
+      candidate = 0.0
+    else:
+      candidate = round(correction / CENTER_TARGET_STEP_M) * CENTER_TARGET_STEP_M
+    if abs(candidate - self.center_target) < CENTER_TARGET_STEP_M - 1e-6:
+      self.center_candidate = self.center_target
+      self.center_candidate_since = now
+      return self.center_target, "target_held"
+    if candidate != self.center_candidate:
+      self.center_candidate = candidate
+      self.center_candidate_since = now
+      return self.center_target, "target_wait"
+    if now - self.center_candidate_since < CENTER_TARGET_STABLE_SECONDS or now - self.center_target_changed_at < CENTER_TARGET_HOLD_SECONDS:
+      return self.center_target, "target_wait"
+    # Quantization supplies the half-inch steps; once the measured error has
+    # remained stable, accept that stepped target in one decision. The output
+    # rate limiter below still moves the vehicle gradually.
+    self.center_target = candidate
+    self.center_target_changed_at = now
+    return self.center_target, "target_step"
+
+  @staticmethod
+  def _native_lane_change_active(model) -> bool:
+    try:
+      return int(model.meta.laneChangeState) != 0
+    except (AttributeError, TypeError, ValueError, OverflowError):
+      return False
+
+  def _begin_lane_change_handoff(self, reason: str, now: float) -> None:
+    if not self.lane_change_suppressed:
+      self.lane_change_suppressed = True
+      self.lane_change_handoff_output = self.last_output or 0.0
+      self._log("lane_change_started", reason=reason,
+                starting_offset_m=round(self.lane_change_handoff_output, 4),
+                fade_inches_per_second=round(LANE_CHANGE_HANDOFF_MPS / INCH_TO_M, 1))
+    if self.nudge_direction:
+      self._log("nudge_cancelled", reason="lane_change",
+                elapsed_seconds=round(max(0.0, now - self.nudge_started_at), 2),
+                remaining_seconds=round(max(0.0, self.nudge_until - now), 2))
+    self.nudge_direction = 0
+    self.nudge_magnitude_inches = 0
+    self.nudge_until = 0.0
+    self.nudge_started_at = 0.0
+    self.pending_nudge_direction = 0
+    self.pending_nudge_action = "none"
+    self.pending_nudge_peak_torque = 0.0
+    self._clear_nudge_timer()
+    self.curve_active = False
+    self.curve_direction = 0
+    self.automatic_request_direction = 0
+    self.automatic_output = 0.0
+    self.filtered_center_error = None
+    self._clear_center_reversal()
+    self._clear_center_target()
+
+  def _update_lane_change_handoff(self, update_dt: float, now: float) -> None:
+    max_step = LANE_CHANGE_HANDOFF_MPS * update_dt
+    self.lane_change_handoff_output += max(-max_step, min(max_step, -self.lane_change_handoff_output))
+    if abs(self.lane_change_handoff_output) < 1e-6:
+      self.lane_change_handoff_output = 0.0
+    self._publish(self.lane_change_handoff_output)
+    if now - self.last_lane_change_log >= SAMPLE_LOG_PERIOD_SECONDS:
+      self._log("lane_change_suppressed", published_offset_m=round(self.lane_change_handoff_output, 4))
+      self.last_lane_change_log = now
+
   def _stable_center_correction(self, correction: float, now: float) -> tuple[float, str]:
     requested_direction = 1 if correction > 0.0 else -1 if correction < 0.0 else 0
     if requested_direction == 0:
@@ -312,6 +405,7 @@ class LanePositionController:
       "ramp_in": "Ramping smoothly",
       "reversal_wait": "Direction stabilizing",
       "reversal_zero_crossing": "Returning through center",
+      "additional_nudge_limited": "Additional nudge limited",
     }.get(reason, "")
 
   def _publish_active_offset_status(self, requested_m: float, applied_m: float, source: str,
@@ -592,12 +686,14 @@ class LanePositionController:
                 elapsed_seconds=round(max(0.0, now - self.nudge_started_at), 2),
                 remaining_seconds=round(max(0.0, self.nudge_until - now), 2))
     self.nudge_direction = 0
+    self.nudge_magnitude_inches = 0
     self.nudge_until = 0.0
     self.nudge_started_at = 0.0
     self._clear_nudge_timer()
     self.pending_nudge_direction = 0
     self.pending_nudge_relatched = False
     self.pending_nudge_peak_torque = 0.0
+    self.pending_nudge_action = "none"
     self.nudge_trigger_peak_torque = 0.0
     self.curve_active = False
     self.curve_direction = 0
@@ -613,6 +709,12 @@ class LanePositionController:
     self.automatic_output = 0.0
     self.filtered_center_error = None
     self._clear_center_reversal()
+    self._clear_center_target()
+    self.lane_change_suppressed = False
+    self.lane_change_blinker_until = 0.0
+    self.lane_change_recovery_since = 0.0
+    self.lane_change_handoff_output = 0.0
+    self.last_lane_change_log = 0.0
     self._publish(0.0)
     if had_offset:
       self._log("reset", reason=reason)
@@ -643,8 +745,25 @@ class LanePositionController:
     if CS.gearShifter != structs.CarState.GearShifter.drive or not lat_active:
       self._reset("inactive")
       return
+    native_lane_change = self._native_lane_change_active(model)
     if CS.leftBlinker or CS.rightBlinker:
-      self._reset("blinker")
+      self.lane_change_blinker_until = now + LANE_CHANGE_BLINKER_LATCH_SECONDS
+    lane_change_signal = native_lane_change or now < self.lane_change_blinker_until
+    if lane_change_signal:
+      self.lane_change_recovery_since = 0.0
+      self._begin_lane_change_handoff("native_lane_change" if native_lane_change else "blinker", now)
+      self._update_lane_change_handoff(update_dt, now)
+      return
+    if self.lane_change_suppressed:
+      if self.lane_change_recovery_since == 0.0:
+        self.lane_change_recovery_since = now
+      if now - self.lane_change_recovery_since < LANE_CHANGE_RECOVERY_SECONDS:
+        self._update_lane_change_handoff(update_dt, now)
+        return
+      self.lane_change_suppressed = False
+      self.lane_change_recovery_since = 0.0
+      self._log("lane_change_complete", published_offset_m=round(self.lane_change_handoff_output, 4))
+      self.lane_change_handoff_output = 0.0
       return
 
     torque = self._finite(CS.steeringTorque)
@@ -679,20 +798,39 @@ class LanePositionController:
         elif abs(torque) > abs(self.pending_nudge_peak_torque):
           self.pending_nudge_peak_torque = torque
         self.pending_nudge_direction = candidate_direction
-        self.pending_nudge_relatched = previous_nudge_direction != 0 and candidate_direction == previous_nudge_direction
+        if previous_nudge_direction and candidate_direction != previous_nudge_direction:
+          self.pending_nudge_action = "cancel_opposite"
+        elif previous_nudge_direction and candidate_direction == previous_nudge_direction:
+          self.pending_nudge_action = "increment"
+        else:
+          self.pending_nudge_action = "start"
+        self.pending_nudge_relatched = self.pending_nudge_action == "increment"
       self._publish(0.0)
       return
     if self.nudge_enabled and self.pending_nudge_direction:
+      action = self.pending_nudge_action
       relatch = self.pending_nudge_relatched
-      self.nudge_direction = self.pending_nudge_direction
-      self.nudge_until = now + self.nudge_hold_seconds
-      self.nudge_started_at = now
+      if action == "cancel_opposite":
+        self.nudge_direction = 0
+        self.nudge_magnitude_inches = 0
+        self.nudge_until = 0.0
+        self.nudge_started_at = 0.0
+        self._log("nudge_neutralized", requested_direction=self.pending_nudge_direction)
+      else:
+        self.nudge_direction = self.pending_nudge_direction
+        self.nudge_magnitude_inches = (min(10, max(self.nudge_offset_inches, self.nudge_magnitude_inches + 1))
+                                       if action == "increment" else self.nudge_offset_inches)
+        self.nudge_until = now + self.nudge_hold_seconds
+        self.nudge_started_at = now
       self.nudge_trigger_peak_torque = self.pending_nudge_peak_torque
       self.pending_nudge_direction = 0
       self.pending_nudge_relatched = False
+      self.pending_nudge_action = "none"
       self.pending_nudge_peak_torque = 0.0
-      self._log("nudge_relatched" if relatch else "nudge_started",
+      if action != "cancel_opposite":
+        self._log("nudge_relatched" if relatch else "nudge_started",
                 direction=self.nudge_direction, hold_seconds=self.nudge_hold_seconds,
+                magnitude_inches=self.nudge_magnitude_inches,
                 trigger_peak_torque=round(self.nudge_trigger_peak_torque, 3),
                 configured_torque_threshold=round(self.nudge_torque_threshold, 2),
                 activation_after_release=True, cancellation_grace_seconds=NUDGE_CANCEL_GRACE_SECONDS)
@@ -751,9 +889,30 @@ class LanePositionController:
     if self.nudge_direction and now < self.nudge_until:
       # Manual nudge is an explicit driver request. It is never canceled,
       # delayed, or capped by model lane confidence or geometry.
-      requested = self.nudge_direction * self.nudge_offset_inches * INCH_TO_M
+      requested = self.nudge_direction * (self.nudge_magnitude_inches or self.nudge_offset_inches) * INCH_TO_M
       requested = max(-MAX_MANUAL_OFFSET_M, min(MAX_MANUAL_OFFSET_M, requested))
+      base_authoritative_m = self.nudge_direction * self.nudge_offset_inches * INCH_TO_M
+      additional_request_m = requested - base_authoritative_m
       applied = requested
+      if abs(additional_request_m) > 1e-6:
+        corridor_horizon_m = max(SAMPLE_DISTANCE_M, min(MAX_CORRIDOR_HORIZON_M,
+                                                        max(self._finite(CS.vEgo), 0.0) * PREDICTIVE_LOOKAHEAD_END_S))
+        nudge_geometry, nudge_geometry_status = self._sample_geometry_if_authoritative(model, corridor_horizon_m)
+        if nudge_geometry is not None:
+          (_, _, _, _, _, vehicle_left_clearance, vehicle_right_clearance,
+           _, _, _, _) = nudge_geometry
+          additional_clearance = vehicle_left_clearance if self.nudge_direction > 0 else vehicle_right_clearance
+          approved_additional_m = min(abs(additional_request_m), max(0.0, additional_clearance))
+          applied = base_authoritative_m + math.copysign(approved_additional_m, additional_request_m)
+          if approved_additional_m + 1e-6 < abs(additional_request_m):
+            limiter_reason = "additional_nudge_limited"
+        else:
+          # The original first nudge remains authoritative. An increment needs
+          # a current painted-lane clearance measurement; otherwise retain the
+          # already accepted base offset.
+          applied = base_authoritative_m
+          limiter_reason = "additional_nudge_limited"
+          geometry_status = nudge_geometry_status
       source = "manual_authoritative"
       self.curve_active = False
       self.curve_direction = 0
@@ -771,6 +930,7 @@ class LanePositionController:
         self._log("nudge_expired", direction=self.nudge_direction,
                   elapsed_seconds=round(max(0.0, now - self.nudge_started_at), 2))
       self.nudge_direction = 0
+      self.nudge_magnitude_inches = 0
       self.nudge_until = 0.0
       self.nudge_started_at = 0.0
       self._clear_nudge_timer()
@@ -840,7 +1000,7 @@ class LanePositionController:
             center_stability_state = "curve_priority"
             self._clear_center_reversal()
           else:
-            center_correction, center_stability_state = self._stable_center_correction(raw_center_correction, now)
+            center_correction, center_stability_state = self._stepped_center_correction(raw_center_correction, now)
           bias_m = self.lane_position_bias_inches * INCH_TO_M
           if self.lane_position_preference == 1:  # measured center
             lane_position_request = center_correction
