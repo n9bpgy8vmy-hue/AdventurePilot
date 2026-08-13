@@ -183,6 +183,63 @@ def test_disabling_go_live_cancels_active_sequence(mocker):
   assert not feature.pending
 
 
+def test_low_speed_drop_during_started_lane_change_does_not_pause(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  lane_model = model()
+  lane_model.meta.laneChangeState = 2
+  lane_model.meta.laneChangeDirection = 1
+
+  action, warning = feature.update(car_state(speed_mph=25, left=True), lane_model, True, True)
+
+  assert action == PostTurnAction.none
+  assert warning is None
+  assert not feature.pending
+
+
+def test_low_speed_drop_during_finishing_lane_change_does_not_pause(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  lane_model = model()
+  lane_model.meta.laneChangeState = 3
+  lane_model.meta.laneChangeDirection = 1
+
+  action, warning = feature.update(car_state(speed_mph=25, left=True), lane_model, True, True)
+
+  assert action == PostTurnAction.none
+  assert warning is None
+  assert not feature.pending
+
+
+def test_completed_lane_change_can_then_start_low_speed_manual_handoff(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  lane_model = model()
+  lane_model.meta.laneChangeState = 3
+  lane_model.meta.laneChangeDirection = 1
+  CS = car_state(speed_mph=25, left=True)
+  assert feature.update(CS, lane_model, True, True)[0] == PostTurnAction.none
+
+  lane_model.meta.laneChangeState = 0
+  lane_model.meta.laneChangeDirection = 0
+  assert feature.update(CS, lane_model, True, True)[0] == PostTurnAction.pause
+
+
+def test_pre_lane_change_does_not_bypass_low_speed_manual_handoff(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  lane_model = model()
+  lane_model.meta.laneChangeState = 1
+  lane_model.meta.laneChangeDirection = 1
+
+  assert feature.update(car_state(speed_mph=25, left=True), lane_model, True, True)[0] == PostTurnAction.pause
+
+
+def test_invalid_model_does_not_bypass_low_speed_manual_handoff(mocker):
+  feature = PostTurnResume(make_params(mocker))
+  lane_model = model()
+  lane_model.meta.laneChangeState = 2
+  lane_model.meta.laneChangeDirection = 1
+
+  assert feature.update(car_state(speed_mph=25, left=True), lane_model, False, True)[0] == PostTurnAction.pause
+
+
 def test_qualifying_turn_arms_pause(mocker):
   feature = PostTurnResume(make_params(mocker))
   action, warning = feature.update(car_state(left=True), model(), True, True)

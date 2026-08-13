@@ -292,11 +292,26 @@ class PostTurnResume:
   def _one_blinker(CS: structs.CarState) -> bool:
     return CS.leftBlinker != CS.rightBlinker
 
-  def _arm_condition(self, CS: structs.CarState, lateral_active: bool) -> bool:
+  @staticmethod
+  def _lane_change_in_progress(model: log.ModelDataV2, model_valid: bool) -> bool:
+    """Protect only a lane change that has actually started, not pre-lane-change."""
+    if not model_valid:
+      return False
+    try:
+      return model.meta.laneChangeState in (
+        log.LaneChangeState.laneChangeStarting,
+        log.LaneChangeState.laneChangeFinishing,
+      )
+    except (AttributeError, TypeError, ValueError):
+      return False
+
+  def _arm_condition(self, CS: structs.CarState, model: log.ModelDataV2,
+                     model_valid: bool, lateral_active: bool) -> bool:
     return bool(
       (self.observe_enabled or self.go_live) and lateral_active and self._one_blinker(CS) and
       CS.gearShifter == structs.CarState.GearShifter.drive and
-      CS.vEgo <= self.max_turn_speed * self._speed_factor()
+      CS.vEgo <= self.max_turn_speed * self._speed_factor() and
+      not self._lane_change_in_progress(model, model_valid)
     )
 
   @staticmethod
@@ -481,7 +496,7 @@ class PostTurnResume:
       return PostTurnAction.none, None
 
     if not self.pending:
-      if not self._arm_condition(CS, lateral_active):
+      if not self._arm_condition(CS, model, model_valid, lateral_active):
         return PostTurnAction.none, None
       self.pending = True
       self.live_sequence = self.go_live
