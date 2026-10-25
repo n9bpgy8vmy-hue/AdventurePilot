@@ -373,19 +373,19 @@ def main(demo=False):
       base_camera_offset = params.get("CameraOffset", return_default=True)
       dynamic_camera_offset = params.get("RivianPilotDynamicCameraOffset", return_default=True)
       dynamic_offset_updated = params.get("RivianPilotDynamicCameraOffsetUpdated", return_default=True)
-      dynamic_offset_valid = camera_offset_helper.valid_rivianpilot_dynamic_offset(
-        dynamic_camera_offset, dynamic_offset_updated, time.monotonic(),
+      camera_offset_helper.set_rivianpilot_offset(
+        base_camera_offset, dynamic_camera_offset, dynamic_offset_updated, time.monotonic(),
+        steering_pressed=sm["carState"].steeringPressed,
+        in_drive=sm["carState"].gearShifter == car.CarState.GearShifter.drive,
+        lat_active=sm["carControl"].latActive,
       )
-      force_zero = (sm["carState"].steeringPressed or sm["carState"].leftBlinker or sm["carState"].rightBlinker or
-                    sm["carState"].gearShifter != car.CarState.GearShifter.drive or
-                    not sm["carControl"].latActive or not dynamic_offset_valid)
-      camera_offset_helper.set_offset(base_camera_offset + (0.0 if force_zero else dynamic_camera_offset),
-                                      immediate=force_zero)
     lat_delay = model.lat_delay + model.LAT_SMOOTH_SECONDS
     if sm.updated["liveCalibration"] and sm.seen['roadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["liveCalibration"].rpyCalib, dtype=np.float32)
       dc = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['roadCameraState'].sensor))]
-      base_model_transform_main = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics if main_wide_camera else dc.fcam.intrinsics, False).astype(np.float32)
+      base_model_transform_main = get_warp_matrix(
+        device_from_calib_euler, dc.ecam.intrinsics if main_wide_camera else dc.fcam.intrinsics, False,
+      ).astype(np.float32)
       base_model_transform_extra = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics, True).astype(np.float32)
       live_calib_seen = True
     if live_calib_seen:

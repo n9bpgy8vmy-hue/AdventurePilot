@@ -1,3 +1,5 @@
+import pytest
+
 from types import SimpleNamespace
 from unittest.mock import MagicMock  # noqa: TID251
 
@@ -313,7 +315,8 @@ def test_adaptive_center_limit_ramps_down_at_highway_speed():
     "RivianPilotCenterCorrectionInches": 10,
     "RivianPilotHighwayCenterCorrectionInches": 3,
   }))
-  assert feature._adaptive_center_limit_m(10 * 0.44704) == 0.0
+  assert feature._adaptive_center_limit_m(0.0) == 10 * 0.0254
+  assert feature._adaptive_center_limit_m(10 * 0.44704) == 10 * 0.0254
   assert abs(feature._adaptive_center_limit_m(30 * 0.44704) - 10 * 0.0254) < 1e-9
   assert abs(feature._adaptive_center_limit_m(55 * 0.44704) - 3 * 0.0254) < 1e-9
 
@@ -690,7 +693,7 @@ def test_unstable_predicted_direction_never_activates():
 def test_established_curve_direction_cannot_reverse_mid_episode():
   feature = LanePositionController(params())
   cs = car_state()
-  left_controls = establish_curve(feature, cs, curvature=0.002)
+  establish_curve(feature, cs, curvature=0.002)
   episode = feature.curve_episode_id
   assert feature.last_output > 0.0
   right_controls = SimpleNamespace(desiredCurvature=-0.002)
@@ -978,3 +981,87 @@ def test_params_write_failure_is_contained_by_outer_suppression():
 
   assert feature.faulted
   assert feature.last_output == 0.0
+
+
+@pytest.mark.parametrize("preference,direction", [(1, 1), (2, 1), (3, -1)])
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_deceleration_stop_and_restart_preserve_lane_target(preference, direction, adaptive):
+  feature = LanePositionController(params({
+    "RivianPilotLanePositionPreference": preference,
+    "RivianPilotAdaptiveCenterCorrection": adaptive,
+    "RivianPilotCurveOffset": False,
+  }))
+  cs = car_state()
+  cs.vEgo = 30 * 0.44704
+  controls = SimpleNamespace(desiredCurvature=0.0)
+  now = 1.0
+  error = direction * 2 * 0.0254
+  def step(speed, center_error=error, probability=0.9):
+    nonlocal now
+    cs.vEgo = speed
+    feature.update(cs, True, model(path_y=center_error - (feature.last_output or 0), probability=probability), controls, now=now)
+    now += 0.2
+  for _ in range(80):
+    step(cs.vEgo)
+  accepted = feature.last_output
+  assert abs(accepted) > 0.0254
+  for speed in [12, 10, 8, 6, 4, 2, 1, 0] + [0] * 100 + [1, 2, 4, 6, 8, 10, 12]:
+    step(speed)
+    assert feature.last_output == pytest.approx(accepted, abs=0.001)
+  # At a stop, a noisy model center must not retarget a valid lane preference.
+  for i in range(30):
+    step(0, -error if i % 2 else 2 * error)
+    assert feature.last_output == pytest.approx(accepted, abs=0.001)
+  # Holding a target never bypasses the existing geometry-loss release.
+  for _ in range(30):
+    step(0, probability=0.1)
+  assert feature.last_output == 0
+  assert feature.center_target == 0
+
+
+def test_center_reversal_completes_through_full_update_loop():
+  feature = LanePositionController(params({"RivianPilotLanePositionPreference": 1}))
+  cs = car_state()
+  controls = SimpleNamespace(desiredCurvature=0.0)
+  outputs = []
+  for i in range(200):
+    error = (5 if i < 70 else -5) * 0.0254
+    feature.update(cs, True, model(path_y=error - (feature.last_output or 0)), controls, now=1 + i * 0.2)
+    outputs.append(feature.last_output)
+  assert outputs[69] == pytest.approx(5 * 0.0254)
+  assert min(abs(v) for v in outputs[70:150]) <= 0.5 * 0.0254
+  assert outputs[-1] == pytest.approx(-5 * 0.0254)
+
+
+@pytest.mark.parametrize("direction,expected", [(1, 6), (-1, 0)])
+def test_multi_cycle_nudge_keeps_original_increment_or_cancel(direction, expected):
+  feature = LanePositionController(params({"RivianPilotNudgeOffsetInches": 5}))
+  cs = car_state()
+  _physical_nudge(feature, cs, 1, 1.0)
+  cs.steeringPressed = True
+  cs.steeringTorque = direction
+  for now in (2.0, 2.2, 2.4, 2.6):
+    feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.0), now=now)
+    assert feature.last_output == 0
+  cs.steeringPressed = False
+  cs.steeringTorque = 0
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.0), now=2.8)
+  assert feature.last_output == pytest.approx(expected * 0.0254)
+
+
+def test_changing_preference_at_stop_clears_old_center_target():
+  p = params({"RivianPilotLanePositionPreference": 2})
+  feature = LanePositionController(p)
+  establish_straight(feature, model(path_y=4 * 0.0254))
+  assert feature.center_target > 0
+  original_get = p.get.side_effect
+  p.get.side_effect = lambda key, **kw: 3 if key == "RivianPilotLanePositionPreference" else original_get(key, **kw)
+  cs = car_state()
+  cs.vEgo = 0
+  for i in range(40):
+    feature.update(cs, True, model(path_y=-(feature.last_output or 0)), SimpleNamespace(desiredCurvature=0), now=5 + i * 0.2)
+  assert feature.center_target == 0
+  assert feature.last_output == pytest.approx(-3 * 0.0254)
+  cs.steeringPressed = True
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0), now=14)
+  assert feature.last_output == 0

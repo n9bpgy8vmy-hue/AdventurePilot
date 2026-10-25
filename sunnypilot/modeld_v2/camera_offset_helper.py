@@ -38,6 +38,17 @@ class CameraOffsetHelper:
     except (TypeError, ValueError, OverflowError):
       return False
 
+  def set_rivianpilot_offset(self, base_offset, dynamic_offset, updated, now, *, steering_pressed, in_drive, lat_active):
+    """Consume the controller's handoff ramp; cancel immediately on hard overrides.
+
+    Blinkers/native lane changes are handled by LanePositionController. They
+    must not bypass that ramp here. Its existing one-second heartbeat watchdog
+    still removes an unavailable or invalid producer.
+    """
+    force_zero = (steering_pressed or not in_drive or not lat_active or
+                  not self.valid_rivianpilot_dynamic_offset(dynamic_offset, updated, now))
+    self.set_offset(base_offset + (0.0 if force_zero else dynamic_offset), immediate=force_zero)
+
   def set_offset(self, offset, immediate=False):
     self.camera_offset = offset
     if immediate:

@@ -616,3 +616,16 @@ def test_metric_thresholds(mocker):
   above = car_state(speed_mph=0, left=True)
   above.vEgo = 30.1 * CV.KPH_TO_MS
   assert feature.update(above, model(), True, True)[0] == PostTurnAction.none
+
+
+def test_control_resets_do_not_remove_diagnostic_rate_limit(mocker):
+  feature = PostTurnResume(make_params(mocker, logging=True))
+  clock = mocker.patch("openpilot.sunnypilot.rivianpilot.post_turn_resume.time.monotonic")
+  log = mocker.patch.object(feature, "_log")
+  cs = car_state(left=True)
+  for i in range(100):
+    clock.return_value = 10 + i / 100
+    feature.reset()
+    feature._sample_diagnostics(cs, model())
+  observations = [call for call in log.call_args_list if call.args[0] == "handover_observation"]
+  assert len(observations) == 2

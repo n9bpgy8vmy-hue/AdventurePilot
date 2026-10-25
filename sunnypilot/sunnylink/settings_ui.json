@@ -706,8 +706,8 @@
             {
               "key": "RivianPilotCenterMinimumSpeed",
               "widget": "option",
-              "title": "Centering Minimum Speed",
-              "description": "Below this speed, measured lane-center correction remains off.",
+              "title": "Hold Centering Below",
+              "description": "Hold the accepted lane-center target while slowing or stopped below this speed. Valid lane boundaries are still required; driver steering and disengagement cancel the offset.",
               "min": 5,
               "max": 45,
               "step": 5,
@@ -724,9 +724,12 @@
               ],
               "enablement": [
                 {
-                  "type": "param",
-                  "key": "RivianPilotAdaptiveCenterCorrection",
-                  "equals": true
+                  "type": "not",
+                  "condition": {
+                    "type": "param",
+                    "key": "RivianPilotLanePositionPreference",
+                    "equals": 0
+                  }
                 }
               ]
             },
@@ -734,7 +737,7 @@
               "key": "RivianPilotCenterFullSpeed",
               "widget": "option",
               "title": "Full Centering Speed",
-              "description": "At this speed, the full Center Correction Limit becomes available.",
+              "description": "Up to this speed, use the full Center Correction Limit. Above it, gradually reduce to the highway limit.",
               "min": 10,
               "max": 55,
               "step": 5,

@@ -21,6 +21,7 @@ from enum import IntEnum
 if gui_app.sunnypilot_ui():
   from openpilot.selfdrive.ui.sunnypilot.mici.onroad.hud_renderer import HudRendererSP as HudRenderer
   from openpilot.selfdrive.ui.sunnypilot.ui_state import OnroadTimerStatus
+  from openpilot.selfdrive.ui.sunnypilot.mici.onroad.lane_position_selector import LanePositionSelector
 
 OpState = log.SelfdriveState.OpenpilotState
 CALIBRATED = log.LiveCalibrationData.Status.calibrated
@@ -149,6 +150,10 @@ class AugmentedRoadView(CameraView):
 
     # Bookmark icon with swipe gesture
     self._bookmark_icon = BookmarkIcon(bookmark_callback)
+    self._lane_selector = self._child(LanePositionSelector(ui_state.params)) if gui_app.sunnypilot_ui() else None
+    if self._lane_selector:
+      self._lane_selector.set_touch_valid_callback(self._touch_valid)
+      self._bookmark_icon.set_touch_valid_callback(lambda: self._touch_valid() and not self._lane_selector.blocks_navigation())
 
     self._model_renderer = ModelRenderer()
     self._hud_renderer = HudRenderer()
@@ -164,7 +169,7 @@ class AugmentedRoadView(CameraView):
 
   def is_swiping_left(self) -> bool:
     """Check if currently swiping left (for scroller to disable)."""
-    return self._bookmark_icon.is_swiping_left()
+    return self._bookmark_icon.is_swiping_left() or bool(self._lane_selector and abs(self.rect.x) < 1 and self._lane_selector.blocks_navigation())
 
   def _update_state(self):
     super()._update_state()
@@ -179,12 +184,15 @@ class AugmentedRoadView(CameraView):
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
     # Don't trigger click callback if bookmark was triggered
-    if not self._bookmark_icon.interacting():
+    if not (self._lane_selector and self._lane_selector.consumed) and not self._bookmark_icon.interacting():
       super()._handle_mouse_release(mouse_pos)
 
   def _render(self, _):
     # Draw text if not onroad
     if not ui_state.started:
+      if self._lane_selector:
+        self._lane_selector.set_available(False)
+        self._lane_selector.render(self.rect)
       rl.draw_rectangle_rec(self.rect, rl.BLACK)
       self._offroad_label.render(self._rect)
       return
@@ -234,6 +242,14 @@ class AugmentedRoadView(CameraView):
                                                alert_to_render.visual_alert == car.CarControl.HUDControl.VisualAlert.steerRequired)
     self._alert_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
+
+    if self._lane_selector:
+      # Ordinary offset/timer notifications can coexist with the top picker;
+      # every other alert and turn signal hides it and cancels pending selection.
+      self._lane_selector.set_available(self._lane_selector.should_show(
+        ui_state.CP.brand, self._lane_selector.go_live, alert_to_render,
+        ui_state.sm["carState"].leftBlinker, ui_state.sm["carState"].rightBlinker, self._hud_renderer.drawing_top_icons()))
+      self._lane_selector.render(self._content_rect)
 
     # Draw fake rounded border
     rl.draw_rectangle_rounded_lines_ex(self._content_rect, 0.2 * 1.02, 10, 50, rl.BLACK)

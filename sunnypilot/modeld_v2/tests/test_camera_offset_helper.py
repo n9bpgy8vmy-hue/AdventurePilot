@@ -96,3 +96,28 @@ class TestCameraOffset:
     assert not np.array_equal(extra_out, extra_transform)
     assert main_out[0, 1] != 0.0
     assert main_out[0, 2] != 0.0
+
+
+def test_controller_handoff_is_consumed_without_zero_jump():
+  from types import SimpleNamespace
+  from openpilot.sunnypilot.rivianpilot.tests.test_lane_position_controller import params, car_state, model, establish_curve
+  from openpilot.sunnypilot.rivianpilot.lane_position_controller import LanePositionController
+  feature = LanePositionController(params())
+  cs = car_state()
+  establish_curve(feature, cs)
+  helper = CameraOffsetHelper()
+  base = 0.02
+  helper.set_offset(base + feature.last_output, immediate=True)
+  before = helper.actual_camera_offset
+  cs.leftBlinker = True
+  feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0.002), now=2.6)
+  helper.set_rivianpilot_offset(base, feature.last_output, 2.6, 2.6, steering_pressed=False, in_drive=True, lat_active=True)
+  assert base < helper.camera_offset < before
+  assert helper.actual_camera_offset == before  # next model update applies smoothing
+  # Hard overrides and a stale producer still remove the transform immediately.
+  for overrides in ({"steering_pressed": True}, {"in_drive": False}, {"lat_active": False}, {"updated": 1.0}):
+    args = dict(updated=2.6, now=2.6, steering_pressed=False, in_drive=True, lat_active=True)
+    args.update(overrides)
+    helper.set_offset(before, immediate=True)
+    helper.set_rivianpilot_offset(base, feature.last_output, **args)
+    assert helper.actual_camera_offset == base

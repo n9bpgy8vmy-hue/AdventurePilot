@@ -279,7 +279,6 @@ class PostTurnResume:
     self.pause_confirmation_ticks = 0
     self.high_speed_lane_confirmed = False
     self.active_blinker_direction = "none"
-    self.last_diagnostic_sample = 0.0
     self.road_edge_recovery_qualified = False
     self.road_edge_grace_ticks = 0
     self.last_road_edge_diagnostics = {}

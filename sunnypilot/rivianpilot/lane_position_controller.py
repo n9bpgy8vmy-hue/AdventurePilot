@@ -117,6 +117,7 @@ class LanePositionController:
     self.last_active_offset_status = None
     self.last_active_offset_heartbeat = 0.0
     self.active_offset_status_cleared = False
+    self.nudge_gesture_origin = None
     self.pending_nudge_direction = 0
     self.pending_nudge_relatched = False
     self.pending_nudge_peak_torque = 0.0
@@ -214,17 +215,16 @@ class LanePositionController:
     low_limit = self.center_correction_inches * INCH_TO_M
     if not self.adaptive_center_correction:
       return low_limit
-    minimum = self._speed_ms(self.center_minimum_speed)
     full = self._speed_ms(self.center_full_speed)
     highway = self._speed_ms(self.center_highway_speed)
-    if not minimum < full < highway:
+    if not full < highway:
       speed_factor = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
-      minimum, full, highway = 15 * speed_factor, 30 * speed_factor, 55 * speed_factor
+      full, highway = 30 * speed_factor, 55 * speed_factor
     high_limit = min(low_limit, self.highway_center_correction_inches * INCH_TO_M)
-    if speed_ms <= minimum:
-      return 0.0
-    if speed_ms < full:
-      return low_limit * (speed_ms - minimum) / (full - minimum)
+    # Slowing down must not remove an already accepted lane-center correction.
+    # Low-speed target holding is handled separately from this amplitude cap.
+    if speed_ms <= full:
+      return low_limit
     if speed_ms < highway:
       blend = (speed_ms - full) / (highway - full)
       return low_limit + blend * (high_limit - low_limit)
@@ -251,8 +251,13 @@ class LanePositionController:
   def _stepped_center_correction(self, correction: float, now: float) -> tuple[float, str]:
     """Accept persistent lane-center error in half-inch steps and hold it."""
     correction, stability = self._stable_center_correction(correction, now)
-    if stability in ("reversal_wait", "reversal_zero_crossing"):
+    if stability == "reversal_wait":
       return self.center_target, stability
+    if stability == "reversal_zero_crossing":
+      # Pass the zero request through to the output rate limiter. Returning the
+      # old target here deadlocks the reversal detector waiting for zero.
+      self._clear_center_target()
+      return 0.0, stability
     if abs(correction) < CENTER_ERROR_DEADBAND_M:
       candidate = 0.0
     else:
@@ -296,6 +301,7 @@ class LanePositionController:
     self.nudge_magnitude_inches = 0
     self.nudge_until = 0.0
     self.nudge_started_at = 0.0
+    self.nudge_gesture_origin = None
     self.pending_nudge_direction = 0
     self.pending_nudge_action = "none"
     self.pending_nudge_peak_torque = 0.0
@@ -690,6 +696,7 @@ class LanePositionController:
     self.nudge_until = 0.0
     self.nudge_started_at = 0.0
     self._clear_nudge_timer()
+    self.nudge_gesture_origin = None
     self.pending_nudge_direction = 0
     self.pending_nudge_relatched = False
     self.pending_nudge_peak_torque = 0.0
@@ -730,6 +737,7 @@ class LanePositionController:
       if self.lane_position_preference != previous_lane_position_preference:
         self.filtered_center_error = None
         self._clear_center_reversal()
+        self._clear_center_target()
       if self.go_live and not previous_go_live:
         # Observation may have a fully ramped simulated output. A live session
         # must always start from zero and build a fresh geometry reference.
@@ -768,7 +776,9 @@ class LanePositionController:
 
     torque = self._finite(CS.steeringTorque)
     if CS.steeringPressed:
-      previous_nudge_direction = self.nudge_direction
+      if self.nudge_gesture_origin is None:
+        self.nudge_gesture_origin = self.nudge_direction
+      previous_nudge_direction = self.nudge_gesture_origin
       within_nudge_grace = self.nudge_direction != 0 and now - self.nudge_started_at <= NUDGE_CANCEL_GRACE_SECONDS
       if self.nudge_direction and not within_nudge_grace:
         self._log("nudge_cancelled", reason="driver_steering",
@@ -785,6 +795,7 @@ class LanePositionController:
       self.automatic_request_direction = 0
       self.filtered_center_error = None
       self._clear_center_reversal()
+      self._clear_center_target()
       if not within_nudge_grace:
         self.nudge_direction = 0
         self.nudge_until = 0.0
@@ -823,6 +834,7 @@ class LanePositionController:
         self.nudge_until = now + self.nudge_hold_seconds
         self.nudge_started_at = now
       self.nudge_trigger_peak_torque = self.pending_nudge_peak_torque
+      self.nudge_gesture_origin = None
       self.pending_nudge_direction = 0
       self.pending_nudge_relatched = False
       self.pending_nudge_action = "none"
@@ -835,6 +847,7 @@ class LanePositionController:
                 configured_torque_threshold=round(self.nudge_torque_threshold, 2),
                 activation_after_release=True, cancellation_grace_seconds=NUDGE_CANCEL_GRACE_SECONDS)
 
+    self.nudge_gesture_origin = None
     desired_curvature = self._finite(controls.desiredCurvature)
     lat_accel = desired_curvature * max(self._finite(CS.vEgo), 0.0) ** 2
     current_curve_strength = min(100.0, abs(lat_accel) / MAX_CURVE_LAT_ACCEL * 100.0)
@@ -992,13 +1005,22 @@ class LanePositionController:
           # canceling itself on the next model frame.
           published_feedback = self.last_output or 0.0
           compensated_center_error = model_center_error + published_feedback
-          filtered_center_error = self._stable_center_error(compensated_center_error, update_dt)
+          holding_center = not self.curve_active and CS.vEgo <= self._speed_ms(self.center_minimum_speed)
+          filtered_center_error = (self.filtered_center_error if holding_center and self.filtered_center_error is not None
+                                   else self._stable_center_error(compensated_center_error, update_dt))
           center_limit_m = self._adaptive_center_limit_m(max(self._finite(CS.vEgo), 0.0))
           raw_center_correction = max(-center_limit_m, min(center_limit_m, filtered_center_error))
           if self.curve_active:
             center_correction = raw_center_correction
             center_stability_state = "curve_priority"
             self._clear_center_reversal()
+          elif holding_center:
+            center_correction = max(-center_limit_m, min(center_limit_m, self.center_target))
+            center_stability_state = "low_speed_hold"
+            # Resume requires a fresh stable candidate, not a timer that elapsed
+            # while waiting at a stop. Boundary checks below remain authoritative.
+            self.center_candidate_since = now
+            self.center_reversal_since = now
           else:
             center_correction, center_stability_state = self._stepped_center_correction(raw_center_correction, now)
           bias_m = self.lane_position_bias_inches * INCH_TO_M
@@ -1067,6 +1089,7 @@ class LanePositionController:
           if self.curve_geometry_misses >= CURVE_GEOMETRY_MISS_LIMIT:
             self.filtered_center_error = None
             self._clear_center_reversal()
+            self._clear_center_target()
           reference_state = "missing"
           if geometry_status == "fork or merge":
             if not self.fork_hold:
@@ -1107,7 +1130,12 @@ class LanePositionController:
           ramp_in_mps = STRONG_CURVE_RAMP_IN_MPS
         if not self.curve_active and self.adaptive_center_correction:
           ramp_in_mps = self._straight_center_ramp_mps(max(self._finite(CS.vEgo), 0.0))
-        rate = ramp_in_mps if abs(target) > abs(self.automatic_output) else CURVE_RAMP_OUT_MPS
+        if not self.curve_active and limiter_reason == "approved":
+          # Preference changes and normal center corrections use the same slow
+          # rate in both directions. Safety-driven releases retain the fast rate.
+          rate = ramp_in_mps
+        else:
+          rate = ramp_in_mps if abs(target) > abs(self.automatic_output) else CURVE_RAMP_OUT_MPS
         max_step = rate * update_dt
         delta = max(-max_step, min(max_step, target - self.automatic_output))
         self.automatic_output += delta
