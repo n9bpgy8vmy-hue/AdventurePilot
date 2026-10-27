@@ -940,6 +940,9 @@ class LanePositionController:
       self._publish_nudge_timer(now)
     else:
       if self.nudge_direction:
+        # Start automatic handback at the command actually published by the
+        # nudge, then apply the normal geometry checks and rate limits.
+        self.automatic_output = self.last_output or 0.0
         self._log("nudge_expired", direction=self.nudge_direction,
                   elapsed_seconds=round(max(0.0, now - self.nudge_started_at), 2))
       self.nudge_direction = 0
@@ -973,7 +976,7 @@ class LanePositionController:
         self.curve_geometry_misses = 0
         self.fork_hold = False
         self.fork_recovery_frames = 0
-        self.automatic_output = 0.0
+        # Preserve continuity while collecting the new curve reference.
         self.automatic_request_direction = 0
         self._log("curve_started", episode_id=self.curve_episode_id,
                   turn_direction="left" if next_curve_direction > 0 else "right",

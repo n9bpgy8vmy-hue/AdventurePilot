@@ -384,6 +384,7 @@ struct OnroadEventSP @0xda96579883444c35 {
     rivianPilotVisionBSMReady @38;
     rivianPilotNudgeTimer @39;
     rivianPilotActiveOffset @40;
+    rivianPilotLaneChangeBlocked @41;
   }
 }
 
@@ -490,6 +491,12 @@ struct LiveMapDataSP @0xf416ec09499d9d19 {
 
 struct ModelDataV2SP @0xa1680744031fdb2d {
   laneTurnDirection @0 :TurnDirection;
+  # Rivian geometry gate status for diagnostics/display; not a traffic-clear signal.
+  laneChangeGuardEnabled @1 :Bool;
+  laneChangeGuardReason @2 :Text;
+  laneChangeGuardDirection @3 :Int8;  # -1 left, +1 right, 0 inactive
+  laneChangeGuardFrameId @4 :UInt32;
+  laneChangeGuardMode @5 :UInt8;  # 0 off, 1 observe, 2 enforce
 
   enum TurnDirection {
     none @0;

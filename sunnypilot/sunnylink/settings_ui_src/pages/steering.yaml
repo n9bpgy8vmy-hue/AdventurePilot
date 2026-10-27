@@ -7,6 +7,27 @@ order: 1
 remote_configurable: true
 description: Lateral control, lane changes, and steering behavior
 sections:
+- id: rivian_lane_change_guard
+  title: Lane Change Guard
+  description: Experimental checks of lane and road-edge geometry for blinker and nudge requests. Does not detect side vehicles or solid markings.
+  items:
+  - key: RivianPilotLaneChangeGuardMode
+    widget: option
+    title: Guard Mode
+    description: Off disables this guard. Observe Only records and displays reasons without blocking. Enforce blocks assisted initiation when geometry is unconfirmed. Manual steering remains available. Restart the device while parked after changing modes.
+    options:
+    - value: 0
+      label: Off
+    - value: 1
+      label: Observe Only
+    - value: 2
+      label: Enforce
+    visibility:
+    - type: capability
+      field: brand
+      equals: rivian
+    enablement:
+    - $ref: '#/macros/offroad'
 - id: mads
   title: Modular Assistive Driving System (MADS)
   description: ''

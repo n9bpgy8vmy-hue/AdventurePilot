@@ -12,6 +12,7 @@ from openpilot.sunnypilot.selfdrive.selfdrived.events_base import EventsBase, Pr
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED, CONFIRM_SPEED_THRESHOLD
 from openpilot.system.hardware import HARDWARE
 from openpilot.sunnypilot.rivianpilot.lane_position_controller import memory_params
+from openpilot.sunnypilot.rivianpilot.lane_change_guard import blocked_reason_from_messages, REASON_TEXT
 
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
@@ -71,6 +72,14 @@ def speed_limit_pre_active_alert(CP: car.CarParams, CS: car.CarState, sm: messag
     "",
     AlertStatus.normal, alert_size,
     Priority.LOW, VisualAlert.none, AudibleAlertSP.promptSingleLow, .1)
+
+
+def rivian_lane_change_blocked_alert(CP, CS, sm, *args) -> Alert:
+  reason = blocked_reason_from_messages(sm)
+  return Alert(
+    "Observe: Would Block" if sm["modelDataV2SP"].laneChangeGuardMode == 1 else "Lane Change Blocked",
+    REASON_TEXT.get(reason, "Adjacent lane unconfirmed"),
+    AlertStatus.userPrompt, AlertSize.mid, Priority.LOW, VisualAlert.none, AudibleAlert.none, .2)
 
 
 def rivian_mads_resume_warning_alert(delay: int) -> Alert:
@@ -342,6 +351,9 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
   EventNameSP.rivianPilotNudgeTimer: {
     ET.PERMANENT: rivian_nudge_timer_alert,
+  },
+  EventNameSP.rivianPilotLaneChangeBlocked: {
+    ET.PERMANENT: rivian_lane_change_blocked_alert,
   },
   EventNameSP.rivianPilotActiveOffset: {
     ET.PERMANENT: rivian_active_offset_alert,

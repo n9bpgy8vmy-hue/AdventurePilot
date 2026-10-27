@@ -317,6 +317,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RivianPilotDynamicCameraOffset", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, FLOAT, "0.0"}},
     {"RivianPilotDynamicCameraOffsetUpdated", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, FLOAT, "0.0"}},
     {"RivianPostTurnObserve", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"RivianPilotLaneChangeGuardMode", {PERSISTENT | BACKUP, INT, "1"}},  // 0 off, 1 observe, 2 enforce; restart to apply
     {"RivianPostTurnGoLive", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RivianPostTurnMaxSpeed", {PERSISTENT | BACKUP, INT, "30"}},  // MPH or km/h
     {"RivianPostTurnMinResumeSpeed", {PERSISTENT | BACKUP, INT, "10"}},  // MPH or km/h

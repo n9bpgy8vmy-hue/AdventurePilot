@@ -140,6 +140,7 @@ jobs:
               sunnypilot/mads/tests/test_rivian_mads_resume.py \
               sunnypilot/rivianpilot/tests/test_post_turn_resume.py \
               sunnypilot/rivianpilot/tests/test_lane_position_controller.py \
+              sunnypilot/rivianpilot/tests/test_lane_change_guard.py \
               sunnypilot/rivianpilot/tests/test_vision_bsm_inference.py \
               sunnypilot/rivianpilot/tests/test_vision_bsmd_resource_guard.py \
               system/manager/test/test_rivian_vision_bsm_process.py \

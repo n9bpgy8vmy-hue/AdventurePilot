@@ -18,6 +18,7 @@ from openpilot.common.transformations.camera import DEVICE_CAMERAS
 from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
+from openpilot.sunnypilot.rivianpilot.lane_change_guard import model_inputs_valid
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, smooth_value, get_curvature_from_plan
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
 from openpilot.selfdrive.modeld.compile_modeld import make_input_queues, WARP_INPUTS, POLICY_INPUTS
@@ -222,7 +223,7 @@ def main(demo=False):
   long_delay = CP.longitudinalActuatorDelay + LONG_SMOOTH_SECONDS
   prev_action = log.ModelDataV2.Action()
 
-  DH = DesireHelper()
+  DH = DesireHelper(require_lane_change_geometry=CP.brand == "rivian")
 
   while True:
     # Keep receiving frames until we are at least 1 frame ahead of previous extra frame
@@ -325,7 +326,15 @@ def main(demo=False):
       l_lane_change_prob = desire_state[log.Desire.laneChangeLeft]
       r_lane_change_prob = desire_state[log.Desire.laneChangeRight]
       lane_change_prob = l_lane_change_prob + r_lane_change_prob
-      DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob)
+      guard_now = time.monotonic()
+      DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob,
+                model=modelv2_send.modelV2, model_valid=modelv2_send.valid and model_inputs_valid(sm, guard_now), now=guard_now)
+      mdv2sp_send.valid = modelv2_send.valid
+      mdv2sp_send.modelDataV2SP.laneChangeGuardEnabled = DH.geometry_guard is not None
+      mdv2sp_send.modelDataV2SP.laneChangeGuardMode = DH.lane_change_guard_mode
+      mdv2sp_send.modelDataV2SP.laneChangeGuardReason = DH.lane_change_guard_reason
+      mdv2sp_send.modelDataV2SP.laneChangeGuardDirection = DH.lane_change_guard_direction
+      mdv2sp_send.modelDataV2SP.laneChangeGuardFrameId = modelv2_send.modelV2.frameId
       modelv2_send.modelV2.meta.laneChangeState = DH.lane_change_state
       modelv2_send.modelV2.meta.laneChangeDirection = DH.lane_change_direction
       mdv2sp_send.modelDataV2SP.laneTurnDirection = DH.lane_turn_direction

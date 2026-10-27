@@ -27,6 +27,7 @@ from openpilot.system.hardware import HARDWARE
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
 from openpilot.sunnypilot.rivianpilot.lane_position_controller import LanePositionController
 from openpilot.sunnypilot.rivianpilot.lane_position_controller import memory_params
+from openpilot.sunnypilot.rivianpilot.lane_change_guard import blocked_reason_from_messages
 from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
@@ -348,6 +349,8 @@ class SelfdriveD(CruiseHelper):
       if (CS.leftBlindspot and direction == LaneChangeDirection.left) or \
          (CS.rightBlindspot and direction == LaneChangeDirection.right):
         self.events.add(EventName.laneChangeBlocked)
+      elif self.CP.brand == "rivian" and blocked_reason_from_messages(self.sm):
+        self.events_sp.add(EventNameSP.rivianPilotLaneChangeBlocked)
       else:
         if direction == LaneChangeDirection.left:
           self.events.add(EventName.preLaneChangeLeft)
