@@ -291,8 +291,8 @@
             {
               "key": "RivianPostTurnGoLive",
               "widget": "toggle",
-              "title": "Go Live with Post-Turn Resume",
-              "description": "Independently activate post-turn control. Native blinker pause remains the fallback until RivianPilot confirms MADS is paused. Default is off.",
+              "title": "Pause Steering for Low-Speed Turns",
+              "description": "On pauses steering assist for a qualifying low-speed signaled turn and resumes after the configured checks. Off disables this entire turn-pause/resume feature. The separate Low-Speed Blinker Pause switch can still pause steering. Default is off.",
               "visibility": [
                 {
                   "type": "capability",
@@ -1090,8 +1090,8 @@
             {
               "key": "BlinkerPauseLateralControl",
               "widget": "toggle",
-              "title": "Pause Lateral Control with Blinker",
-              "description": "Pause lateral control with blinker when traveling below the desired speed selected.",
+              "title": "Low-Speed Blinker Pause",
+              "description": "On pauses steering assist while a blinker is active below the selected speed. Off disables this blinker-based pause. To disable both custom low-speed turn pauses, also turn off Pause Steering for Low-Speed Turns. Driver overrides and system fault disengagements still apply.",
               "sub_items": [
                 {
                   "key": "BlinkerMinLateralControlSpeed",
