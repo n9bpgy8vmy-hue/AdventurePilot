@@ -537,7 +537,8 @@ class LanePositionController:
     lines = list(model.laneLines)
     path_x = list(model.position.x)
     path_y = list(model.position.y)
-    if len(probs) < 3 or len(lines) < 3 or min(probs[1], probs[2]) < MIN_LANE_PROBABILITY:
+    if (len(probs) < 3 or len(lines) < 3 or
+        any(not math.isfinite(p) or not MIN_LANE_PROBABILITY <= p <= 1.0 for p in probs[1:3])):
       raise ValueError("lane confidence")
     left_x, left_y = list(lines[1].x), list(lines[1].y)
     right_y = list(lines[2].y)

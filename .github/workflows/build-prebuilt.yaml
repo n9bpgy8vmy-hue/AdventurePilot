@@ -92,6 +92,9 @@ jobs:
 
       - name: Setup build environment
         run: |
+          # Never erase the live installation or build while the car is onroad.
+          test "$(cat /data/params/d/IsOnroad)" = "0"
+          test "$(stat -Lc '%d:%i' /data/openpilot)" = "$(stat -Lc '%d:%i' /data/github/openpilot)"
           # BUILD_DIR is the bind-mounted /data/openpilot (job namespace masks the runner's own
           # openpilot with github-runner-owned /data/github/openpilot). Ensure it exists, is empty,
           # and is owned by the job user before rsyncing the source in.

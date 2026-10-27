@@ -11,6 +11,959 @@
       "description": "Lateral control, lane changes, and steering behavior",
       "sections": [
         {
+          "id": "rivianpilot_lane_position",
+          "title": "Lane Position",
+          "items": [
+            {
+              "key": "RivianPilotLanePositionObserve",
+              "widget": "toggle",
+              "title": "Preview Lane Position",
+              "description": "Calculate and log requested, safety-capped, and applied offsets without changing the model path.",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotLanePositionGoLive",
+              "widget": "toggle",
+              "title": "Apply Lane Position",
+              "description": "Apply the selected lane position. Enable Preview Lane Position first. Default removes the persistent position preference; curve adjustment and manual nudge are separate settings.",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "offroad_only"
+                },
+                {
+                  "type": "param",
+                  "key": "RivianPilotLanePositionObserve",
+                  "equals": true
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotLanePositionPreference",
+              "widget": "multiple_button",
+              "title": "Preferred Position",
+              "description": "Default follows the model path. Center uses trusted lane geometry; Left and Right add the selected bias on straight roads and curves. Curve avoidance remains the higher-priority constraint.",
+              "options": [
+                {
+                  "value": 0,
+                  "label": "Default"
+                },
+                {
+                  "value": 1,
+                  "label": "Center"
+                },
+                {
+                  "value": 2,
+                  "label": "Left"
+                },
+                {
+                  "value": 3,
+                  "label": "Right"
+                }
+              ],
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotLanePositionObserve",
+                  "equals": true
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotLanePositionBiasInches",
+              "widget": "option",
+              "title": "Left / Right Offset",
+              "description": "Additional Left or Right preference after center correction. Center plus bias may request up to 15 inches before boundary, fork, ramp, and defensive limits.",
+              "min": 1,
+              "max": 10,
+              "step": 1,
+              "unit": "inches",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "not",
+                  "condition": {
+                    "type": "param",
+                    "key": "RivianPilotLanePositionPreference",
+                    "equals": 0
+                  }
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotActiveOffsetDisplay",
+              "widget": "toggle",
+              "title": "Show Position Status",
+              "description": "Silently show the active source, direction, applied distance, and any boundary, fork, confidence, or smoothing limit. Safety alerts always take priority.",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotLanePositionGoLive",
+                  "equals": true
+                }
+              ]
+            }
+          ],
+          "sub_panels": [
+            {
+              "id": "rivianpilot_lane_position_advanced",
+              "label": "Advanced: Lane Position",
+              "trigger_key": "RivianPilotLanePositionObserve",
+              "trigger_condition": {
+                "type": "capability",
+                "field": "brand",
+                "equals": "rivian"
+              },
+              "items": [
+                {
+                  "key": "RivianPilotVehicleWidthInches",
+                  "widget": "option",
+                  "title": "Vehicle Body Width",
+                  "description": "Body-width envelope used for lane-clearance calculations. Mirrors are excluded.",
+                  "min": 78,
+                  "max": 86,
+                  "step": 1,
+                  "unit": "inches",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPilotBoundaryBufferInches",
+                  "widget": "option",
+                  "title": "Boundary Comfort Buffer",
+                  "description": "Minimum desired body clearance from each confidently detected painted lane boundary.",
+                  "min": 3,
+                  "max": 12,
+                  "step": 1,
+                  "unit": "inches",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPilotCenterCorrectionInches",
+                  "widget": "option",
+                  "title": "Center Correction Limit",
+                  "description": "Maximum measured model-to-lane-center correction before adding an optional Left or Right bias.",
+                  "min": 1,
+                  "max": 10,
+                  "step": 1,
+                  "unit": "inches",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "not",
+                      "condition": {
+                        "type": "param",
+                        "key": "RivianPilotLanePositionPreference",
+                        "equals": 0
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPilotAdaptiveCenterCorrection",
+                  "widget": "toggle",
+                  "title": "Speed-Adaptive Centering",
+                  "description": "Reduce measured lane-center correction at highway speed while retaining stronger low-speed centering. Curve avoidance, bias, and manual nudge are unchanged.",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "not",
+                      "condition": {
+                        "type": "param",
+                        "key": "RivianPilotLanePositionPreference",
+                        "equals": 0
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPilotCenterMinimumSpeed",
+                  "widget": "option",
+                  "title": "Hold Centering Below",
+                  "description": "Hold the accepted lane-center target while slowing or stopped below this speed. Valid lane boundaries are still required; driver steering and disengagement cancel the offset.",
+                  "min": 5,
+                  "max": 45,
+                  "step": 5,
+                  "unit": {
+                    "metric": "km/h",
+                    "imperial": "mph"
+                  },
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "not",
+                      "condition": {
+                        "type": "param",
+                        "key": "RivianPilotLanePositionPreference",
+                        "equals": 0
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPilotCenterFullSpeed",
+                  "widget": "option",
+                  "title": "Full Centering Speed",
+                  "description": "Up to this speed, use the full Center Correction Limit. Above it, gradually reduce to the highway limit.",
+                  "min": 10,
+                  "max": 55,
+                  "step": 5,
+                  "unit": {
+                    "metric": "km/h",
+                    "imperial": "mph"
+                  },
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "param",
+                      "key": "RivianPilotAdaptiveCenterCorrection",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPilotCenterHighwaySpeed",
+                  "widget": "option",
+                  "title": "Highway Centering Speed",
+                  "description": "At and above this speed, correction is limited by Highway Center Correction.",
+                  "min": 30,
+                  "max": 85,
+                  "step": 5,
+                  "unit": {
+                    "metric": "km/h",
+                    "imperial": "mph"
+                  },
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "param",
+                      "key": "RivianPilotAdaptiveCenterCorrection",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPilotHighwayCenterCorrectionInches",
+                  "widget": "option",
+                  "title": "Highway Center Correction",
+                  "description": "Maximum measured centering correction at highway speed. Left or Right bias remains additional.",
+                  "min": 1,
+                  "max": 10,
+                  "step": 1,
+                  "unit": "inches",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "param",
+                      "key": "RivianPilotAdaptiveCenterCorrection",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPilotLanePositionRelaxed",
+                  "widget": "toggle",
+                  "title": "Allow Poorly Marked Roads",
+                  "description": "Without stable painted lane lines, permit at most two inches of curve offset. Leave off for strict lane-boundary behavior.",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    },
+                    {
+                      "type": "param",
+                      "key": "RivianPilotCurveOffset",
+                      "equals": true
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPilotPoorRoadOffsetInches",
+                  "widget": "option",
+                  "title": "Poorly Marked Road Offset Request",
+                  "description": "Requested maximum from 1 to 10 inches. Without trustworthy boundary clearance, runtime approval remains capped at three inches.",
+                  "min": 1,
+                  "max": 10,
+                  "step": 1,
+                  "unit": "inches",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    },
+                    {
+                      "type": "param",
+                      "key": "RivianPilotLanePositionRelaxed",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "rivianpilot_nudge",
+          "title": "Temporary Position Nudge",
+          "items": [
+            {
+              "key": "RivianPilotNudgeOffset",
+              "widget": "toggle",
+              "title": "Enable Temporary Nudge",
+              "description": "After a deliberate steering nudge, temporarily prefer that side of the current lane.",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotLanePositionObserve",
+                  "equals": true
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotNudgeOffsetInches",
+              "widget": "option",
+              "title": "Nudge Offset Distance",
+              "description": "Requested nudge offset before lane-boundary safety clamping.",
+              "min": 2,
+              "max": 10,
+              "step": 1,
+              "unit": "inches",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotNudgeOffset",
+                  "equals": true
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotNudgeHoldSeconds",
+              "widget": "option",
+              "title": "Maximum Nudge Hold Time",
+              "description": "Maximum time to retain a nudge preference. Driver steering, a blinker, inactive lateral control, or expiration ends it sooner.",
+              "options": [
+                {
+                  "value": 5,
+                  "label": "5 seconds"
+                },
+                {
+                  "value": 10,
+                  "label": "10 seconds"
+                },
+                {
+                  "value": 20,
+                  "label": "20 seconds"
+                },
+                {
+                  "value": 30,
+                  "label": "30 seconds"
+                },
+                {
+                  "value": 60,
+                  "label": "1 minute"
+                },
+                {
+                  "value": 120,
+                  "label": "2 minutes"
+                },
+                {
+                  "value": 300,
+                  "label": "5 minutes"
+                },
+                {
+                  "value": 600,
+                  "label": "10 minutes"
+                },
+                {
+                  "value": 900,
+                  "label": "15 minutes"
+                },
+                {
+                  "value": 1800,
+                  "label": "30 minutes"
+                }
+              ],
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotNudgeOffset",
+                  "equals": true
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotNudgeTimerDisplay",
+              "widget": "toggle",
+              "title": "Show Nudge Countdown",
+              "description": "Show a small silent countdown while a manual nudge is active. Safety alerts always take priority.",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotNudgeOffset",
+                  "equals": true
+                }
+              ]
+            }
+          ],
+          "sub_panels": [
+            {
+              "id": "rivianpilot_nudge_advanced",
+              "label": "Advanced: Temporary Position Nudge",
+              "trigger_key": "RivianPilotNudgeOffset",
+              "trigger_condition": {
+                "type": "capability",
+                "field": "brand",
+                "equals": "rivian"
+              },
+              "items": [
+                {
+                  "key": "RivianPilotNudgeTorqueThresholdTenths",
+                  "widget": "option",
+                  "title": "Nudge Activation Torque",
+                  "description": "Steering pressure required to request a manual lane-position nudge. The nudge activates after steering pressure is released.",
+                  "options": [
+                    {
+                      "value": 5,
+                      "label": "0.5"
+                    },
+                    {
+                      "value": 6,
+                      "label": "0.6"
+                    },
+                    {
+                      "value": 7,
+                      "label": "0.7 (Recommended)"
+                    },
+                    {
+                      "value": 8,
+                      "label": "0.8"
+                    },
+                    {
+                      "value": 9,
+                      "label": "0.9"
+                    },
+                    {
+                      "value": 10,
+                      "label": "1.0"
+                    },
+                    {
+                      "value": 11,
+                      "label": "1.1"
+                    },
+                    {
+                      "value": 12,
+                      "label": "1.2"
+                    },
+                    {
+                      "value": 13,
+                      "label": "1.3"
+                    },
+                    {
+                      "value": 14,
+                      "label": "1.4"
+                    },
+                    {
+                      "value": 15,
+                      "label": "1.5"
+                    }
+                  ],
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "param",
+                      "key": "RivianPilotNudgeOffset",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "rivianpilot_curve",
+          "title": "Curve Position",
+          "items": [
+            {
+              "key": "RivianPilotCurveOffset",
+              "widget": "toggle",
+              "title": "Curve Offset",
+              "description": "Move the preferred path away from the inside edge when predicted lateral acceleration exceeds the threshold.",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotLanePositionObserve",
+                  "equals": true
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotCurveOffsetInches",
+              "widget": "option",
+              "title": "Maximum Curve Offset",
+              "description": "Maximum requested curve offset before lane-boundary safety clamping.",
+              "min": 1,
+              "max": 10,
+              "step": 1,
+              "unit": "inches",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotCurveOffset",
+                  "equals": true
+                }
+              ]
+            },
+            {
+              "key": "RivianPilotLaneCorrectionAlert",
+              "widget": "toggle",
+              "title": "Lane Correction Notification",
+              "description": "Show one message and play one chime when a new automatic curve correction receives a nonzero safety-approved target.",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "RivianPilotLanePositionGoLive",
+                  "equals": true
+                }
+              ]
+            }
+          ],
+          "sub_panels": [
+            {
+              "id": "rivianpilot_curve_advanced",
+              "label": "Advanced: Curve Position",
+              "trigger_key": "RivianPilotCurveOffset",
+              "trigger_condition": {
+                "type": "capability",
+                "field": "brand",
+                "equals": "rivian"
+              },
+              "items": [
+                {
+                  "key": "RivianPilotCurveThreshold",
+                  "widget": "option",
+                  "title": "Curve Activation Threshold",
+                  "description": "Higher values require a stronger predicted curve before applying an offset.",
+                  "min": 10,
+                  "max": 90,
+                  "step": 5,
+                  "unit": "percent",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "param",
+                      "key": "RivianPilotCurveOffset",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "rivianpilot_post_turn_resume",
+          "title": "Pause and Resume After Turns",
+          "description": "Pause MADS for a signaled low-speed manual turn, then require a stable detected lane and warn before resuming.",
+          "items": [
+            {
+              "key": "RivianPostTurnGoLive",
+              "widget": "toggle",
+              "title": "Pause Steering for Low-Speed Turns",
+              "description": "On pauses steering assist for a qualifying low-speed signaled turn and resumes after the configured checks. Off disables this entire turn-pause/resume feature. The separate Low-Speed Blinker Pause switch can still pause steering. Default is off.",
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ],
+              "enablement": [
+                {
+                  "type": "offroad_only"
+                }
+              ]
+            },
+            {
+              "key": "RivianPostTurnResumeDelay",
+              "widget": "option",
+              "title": "Warning Before Resuming",
+              "description": "Choose Immediate to resume as soon as stable-lane confirmation succeeds, without a countdown or chime. Other values retain the warning delay.",
+              "options": [
+                {
+                  "value": 0,
+                  "label": "0 seconds \u2014 Immediate"
+                },
+                {
+                  "value": 1,
+                  "label": "1 second"
+                },
+                {
+                  "value": 2,
+                  "label": "2 seconds"
+                },
+                {
+                  "value": 3,
+                  "label": "3 seconds"
+                },
+                {
+                  "value": 4,
+                  "label": "4 seconds"
+                },
+                {
+                  "value": 5,
+                  "label": "5 seconds"
+                }
+              ],
+              "visibility": [
+                {
+                  "type": "capability",
+                  "field": "brand",
+                  "equals": "rivian"
+                }
+              ]
+            }
+          ],
+          "sub_panels": [
+            {
+              "id": "rivian_turn_advanced",
+              "label": "Advanced: Turn Resume",
+              "trigger_key": "RivianPostTurnGoLive",
+              "trigger_condition": {
+                "type": "capability",
+                "field": "brand",
+                "equals": "rivian"
+              },
+              "items": [
+                {
+                  "key": "RivianPostTurnObserve",
+                  "widget": "toggle",
+                  "title": "Observe Post-Turn Resume",
+                  "description": "Record when RivianPilot would pause and resume around a qualifying manual turn. Observation never changes steering or MADS.",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPostTurnMaxSpeed",
+                  "widget": "option",
+                  "title": "Maximum Turn Pause Speed",
+                  "description": "Arm the manual-turn pause only at or below this speed.",
+                  "min": 10,
+                  "max": 40,
+                  "step": 5,
+                  "unit": {
+                    "metric": "km/h",
+                    "imperial": "mph"
+                  },
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPostTurnMinResumeSpeed",
+                  "widget": "option",
+                  "title": "Minimum Post-Turn Resume Speed",
+                  "description": "Keep MADS paused until the vehicle reaches at least this speed in Drive.",
+                  "min": 5,
+                  "max": 30,
+                  "step": 5,
+                  "unit": {
+                    "metric": "km/h",
+                    "imperial": "mph"
+                  },
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPostTurnStableSeconds",
+                  "widget": "option",
+                  "title": "Stable Lane Confirmation",
+                  "description": "Require the selected boundary mode and settled steering/yaw continuously for this long before warning.",
+                  "min": 1,
+                  "max": 3,
+                  "step": 1,
+                  "unit": "seconds",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ]
+                },
+                {
+                  "key": "RivianPostTurnRelaxedRoadEdges",
+                  "widget": "toggle",
+                  "title": "Allow Curb-Only Road Resume",
+                  "description": "Opt in to resume without painted lane lines when both road edges and a safe model path remain confident. Strict lane-line behavior remains the default.",
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "brand",
+                      "equals": "rivian"
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "lane_change",
+          "title": "Lane Change",
+          "description": "Automatic lane change timing and behavior",
+          "items": [
+            {
+              "key": "AutoLaneChangeTimer",
+              "widget": "option",
+              "title": "Auto Lane Change by Blinker",
+              "description": "Choose a steering nudge or a blinker timer to initiate an assisted lane change. When road-edge detection is enabled, a nudge can override its block. Check adjacent traffic yourself.",
+              "details": "Please use caution when using this feature. Only use the blinker when traffic and road conditions permit.",
+              "options": [
+                {
+                  "value": -1,
+                  "label": "Off"
+                },
+                {
+                  "value": 0,
+                  "label": "Nudge"
+                },
+                {
+                  "value": 1,
+                  "label": "Nudgeless"
+                },
+                {
+                  "value": 2,
+                  "label": "0.5 second"
+                },
+                {
+                  "value": 3,
+                  "label": "1 second"
+                },
+                {
+                  "value": 4,
+                  "label": "2 seconds"
+                },
+                {
+                  "value": 5,
+                  "label": "3 seconds"
+                }
+              ]
+            },
+            {
+              "key": "RoadEdgeLaneChangeEnabled",
+              "widget": "toggle",
+              "title": "Block Lane Change: Road Edge Detection",
+              "description": "Blocks lane change when the model sees a road edge on the side you signal."
+            },
+            {
+              "key": "AutoLaneChangeBsmDelay",
+              "widget": "toggle",
+              "title": "Auto Lane Change: Delay with Blind Spot",
+              "description": "Toggle to enable a delay timer for lane changes when blind spot monitoring (BSM) detects a vehicle in your blind spot.",
+              "enablement": [
+                {
+                  "type": "capability",
+                  "field": "enable_bsm",
+                  "equals": true
+                },
+                {
+                  "type": "param_compare",
+                  "key": "AutoLaneChangeTimer",
+                  "op": ">",
+                  "value": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
           "id": "mads",
           "title": "Modular Assistive Driving System (MADS)",
           "description": "",
@@ -216,9 +1169,9 @@
                 {
                   "key": "RivianMadsResumeDelay",
                   "widget": "option",
-                  "title": "MADS Auto-Resume Warning",
-                  "description": "After the minimum auto-resume speed is reached, play a chime and wait this long before MADS resumes.",
-                  "min": 1,
+                  "title": "Warning Before Resuming After Reverse",
+                  "description": "Choose 0 seconds for no extra countdown or chime after Drive and minimum-speed checks pass. Other values add a warning delay.",
+                  "min": 0,
                   "max": 5,
                   "step": 1,
                   "unit": "seconds",
@@ -260,823 +1213,6 @@
                       "type": "offroad_only"
                     }
                   ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "id": "rivianpilot_post_turn_resume",
-          "title": "RivianPilot Post-Turn Resume",
-          "description": "Pause MADS for a signaled low-speed manual turn, then require a stable detected lane and warn before resuming.",
-          "items": [
-            {
-              "key": "RivianPostTurnObserve",
-              "widget": "toggle",
-              "title": "Observe Post-Turn Resume",
-              "description": "Record when RivianPilot would pause and resume around a qualifying manual turn. Observation never changes steering or MADS.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "offroad_only"
-                }
-              ]
-            },
-            {
-              "key": "RivianPostTurnGoLive",
-              "widget": "toggle",
-              "title": "Pause Steering for Low-Speed Turns",
-              "description": "On pauses steering assist for a qualifying low-speed signaled turn and resumes after the configured checks. Off disables this entire turn-pause/resume feature. The separate Low-Speed Blinker Pause switch can still pause steering. Default is off.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "offroad_only"
-                }
-              ]
-            },
-            {
-              "key": "RivianPostTurnMaxSpeed",
-              "widget": "option",
-              "title": "Maximum Turn Pause Speed",
-              "description": "Arm the manual-turn pause only at or below this speed.",
-              "min": 10,
-              "max": 40,
-              "step": 5,
-              "unit": {
-                "metric": "km/h",
-                "imperial": "mph"
-              },
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ]
-            },
-            {
-              "key": "RivianPostTurnMinResumeSpeed",
-              "widget": "option",
-              "title": "Minimum Post-Turn Resume Speed",
-              "description": "Keep MADS paused until the vehicle reaches at least this speed in Drive.",
-              "min": 5,
-              "max": 30,
-              "step": 5,
-              "unit": {
-                "metric": "km/h",
-                "imperial": "mph"
-              },
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ]
-            },
-            {
-              "key": "RivianPostTurnStableSeconds",
-              "widget": "option",
-              "title": "Stable Lane Confirmation",
-              "description": "Require the selected boundary mode and settled steering/yaw continuously for this long before warning.",
-              "min": 1,
-              "max": 3,
-              "step": 1,
-              "unit": "seconds",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ]
-            },
-            {
-              "key": "RivianPostTurnRelaxedRoadEdges",
-              "widget": "toggle",
-              "title": "Allow Curb-Only Road Resume",
-              "description": "Opt in to resume without painted lane lines when both road edges and a safe model path remain confident. Strict lane-line behavior remains the default.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "offroad_only"
-                }
-              ]
-            },
-            {
-              "key": "RivianPostTurnResumeDelay",
-              "widget": "option",
-              "title": "Post-Turn Resume Warning",
-              "description": "Choose Immediate to resume as soon as stable-lane confirmation succeeds, without a countdown or chime. Other values retain the warning delay.",
-              "options": [
-                {
-                  "value": 0,
-                  "label": "Immediate"
-                },
-                {
-                  "value": 1,
-                  "label": "1 second"
-                },
-                {
-                  "value": 2,
-                  "label": "2 seconds"
-                },
-                {
-                  "value": 3,
-                  "label": "3 seconds"
-                },
-                {
-                  "value": 4,
-                  "label": "4 seconds"
-                },
-                {
-                  "value": 5,
-                  "label": "5 seconds"
-                }
-              ],
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "id": "rivianpilot_lane_position",
-          "title": "RivianPilot Lane Position",
-          "description": "Apply a small, bounded lane-position preference on curves or after a deliberate steering nudge. Driver steering always overrides it.",
-          "items": [
-            {
-              "key": "RivianPilotLanePositionObserve",
-              "widget": "toggle",
-              "title": "Observe Lane Position",
-              "description": "Calculate and log requested, safety-capped, and applied offsets without changing the model path.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotLanePositionGoLive",
-              "widget": "toggle",
-              "title": "Go Live",
-              "description": "Allow the validated temporary offset to influence the model path. Requires Observe and confident painted lane boundaries.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "offroad_only"
-                },
-                {
-                  "type": "param",
-                  "key": "RivianPilotLanePositionObserve",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotCurveOffset",
-              "widget": "toggle",
-              "title": "Curve Offset",
-              "description": "Move the preferred path away from the inside edge when predicted lateral acceleration exceeds the threshold.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotLanePositionObserve",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotLaneCorrectionAlert",
-              "widget": "toggle",
-              "title": "Lane Correction Notification",
-              "description": "Show one message and play one chime when a new automatic curve correction receives a nonzero safety-approved target.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotLanePositionGoLive",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotActiveOffsetDisplay",
-              "widget": "toggle",
-              "title": "Show Active Offset",
-              "description": "Silently show the active source, direction, applied distance, and any boundary, fork, confidence, or smoothing limit. Safety alerts always take priority.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotLanePositionGoLive",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotVehicleWidthInches",
-              "widget": "option",
-              "title": "Vehicle Body Width",
-              "description": "Body-width envelope used for lane-clearance calculations. Mirrors are excluded.",
-              "min": 78,
-              "max": 86,
-              "step": 1,
-              "unit": "inches",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "offroad_only"
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotBoundaryBufferInches",
-              "widget": "option",
-              "title": "Boundary Comfort Buffer",
-              "description": "Minimum desired body clearance from each confidently detected painted lane boundary.",
-              "min": 3,
-              "max": 12,
-              "step": 1,
-              "unit": "inches",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "offroad_only"
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotCurveOffsetInches",
-              "widget": "option",
-              "title": "Maximum Curve Offset",
-              "description": "Maximum requested curve offset before lane-boundary safety clamping.",
-              "min": 1,
-              "max": 10,
-              "step": 1,
-              "unit": "inches",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotCurveOffset",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotCurveThreshold",
-              "widget": "option",
-              "title": "Curve Activation Threshold",
-              "description": "Higher values require a stronger predicted curve before applying an offset.",
-              "min": 10,
-              "max": 90,
-              "step": 5,
-              "unit": "percent",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotCurveOffset",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotLanePositionPreference",
-              "widget": "multiple_button",
-              "title": "Lane Position",
-              "description": "Default follows the model path. Center uses trusted lane geometry; Left and Right add the selected bias on straight roads and curves. Curve avoidance remains the higher-priority constraint.",
-              "options": [
-                {
-                  "value": 0,
-                  "label": "Default"
-                },
-                {
-                  "value": 1,
-                  "label": "Center"
-                },
-                {
-                  "value": 2,
-                  "label": "Left"
-                },
-                {
-                  "value": 3,
-                  "label": "Right"
-                }
-              ],
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotLanePositionObserve",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotCenterCorrectionInches",
-              "widget": "option",
-              "title": "Center Correction Limit",
-              "description": "Maximum measured model-to-lane-center correction before adding an optional Left or Right bias.",
-              "min": 1,
-              "max": 10,
-              "step": 1,
-              "unit": "inches",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "not",
-                  "condition": {
-                    "type": "param",
-                    "key": "RivianPilotLanePositionPreference",
-                    "equals": 0
-                  }
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotAdaptiveCenterCorrection",
-              "widget": "toggle",
-              "title": "Speed-Adaptive Centering",
-              "description": "Reduce measured lane-center correction at highway speed while retaining stronger low-speed centering. Curve avoidance, bias, and manual nudge are unchanged.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "not",
-                  "condition": {
-                    "type": "param",
-                    "key": "RivianPilotLanePositionPreference",
-                    "equals": 0
-                  }
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotCenterMinimumSpeed",
-              "widget": "option",
-              "title": "Hold Centering Below",
-              "description": "Hold the accepted lane-center target while slowing or stopped below this speed. Valid lane boundaries are still required; driver steering and disengagement cancel the offset.",
-              "min": 5,
-              "max": 45,
-              "step": 5,
-              "unit": {
-                "metric": "km/h",
-                "imperial": "mph"
-              },
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "not",
-                  "condition": {
-                    "type": "param",
-                    "key": "RivianPilotLanePositionPreference",
-                    "equals": 0
-                  }
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotCenterFullSpeed",
-              "widget": "option",
-              "title": "Full Centering Speed",
-              "description": "Up to this speed, use the full Center Correction Limit. Above it, gradually reduce to the highway limit.",
-              "min": 10,
-              "max": 55,
-              "step": 5,
-              "unit": {
-                "metric": "km/h",
-                "imperial": "mph"
-              },
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotAdaptiveCenterCorrection",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotCenterHighwaySpeed",
-              "widget": "option",
-              "title": "Highway Centering Speed",
-              "description": "At and above this speed, correction is limited by Highway Center Correction.",
-              "min": 30,
-              "max": 85,
-              "step": 5,
-              "unit": {
-                "metric": "km/h",
-                "imperial": "mph"
-              },
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotAdaptiveCenterCorrection",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotHighwayCenterCorrectionInches",
-              "widget": "option",
-              "title": "Highway Center Correction",
-              "description": "Maximum measured centering correction at highway speed. Left or Right bias remains additional.",
-              "min": 1,
-              "max": 10,
-              "step": 1,
-              "unit": "inches",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotAdaptiveCenterCorrection",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotLanePositionBiasInches",
-              "widget": "option",
-              "title": "Lane Position Bias",
-              "description": "Additional Left or Right preference after center correction. Center plus bias may request up to 15 inches before boundary, fork, ramp, and defensive limits.",
-              "min": 1,
-              "max": 10,
-              "step": 1,
-              "unit": "inches",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "not",
-                  "condition": {
-                    "type": "param",
-                    "key": "RivianPilotLanePositionPreference",
-                    "equals": 0
-                  }
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotLanePositionRelaxed",
-              "widget": "toggle",
-              "title": "Allow Poorly Marked Roads",
-              "description": "Without stable painted lane lines, permit at most two inches of curve offset. Leave off for strict lane-boundary behavior.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "offroad_only"
-                },
-                {
-                  "type": "param",
-                  "key": "RivianPilotCurveOffset",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotPoorRoadOffsetInches",
-              "widget": "option",
-              "title": "Poorly Marked Road Offset Request",
-              "description": "Requested maximum from 1 to 10 inches. Without trustworthy boundary clearance, runtime approval remains capped at three inches.",
-              "min": 1,
-              "max": 10,
-              "step": 1,
-              "unit": "inches",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "offroad_only"
-                },
-                {
-                  "type": "param",
-                  "key": "RivianPilotLanePositionRelaxed",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotNudgeOffset",
-              "widget": "toggle",
-              "title": "Nudge Lane Offset",
-              "description": "After a deliberate steering nudge, temporarily prefer that side of the current lane.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotLanePositionObserve",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotNudgeOffsetInches",
-              "widget": "option",
-              "title": "Nudge Offset Distance",
-              "description": "Requested nudge offset before lane-boundary safety clamping.",
-              "min": 2,
-              "max": 10,
-              "step": 1,
-              "unit": "inches",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotNudgeOffset",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotNudgeTorqueThresholdTenths",
-              "widget": "option",
-              "title": "Nudge Activation Torque",
-              "description": "Steering pressure required to request a manual lane-position nudge. The nudge activates after steering pressure is released.",
-              "options": [
-                {
-                  "value": 5,
-                  "label": "0.5"
-                },
-                {
-                  "value": 6,
-                  "label": "0.6"
-                },
-                {
-                  "value": 7,
-                  "label": "0.7 (Recommended)"
-                },
-                {
-                  "value": 8,
-                  "label": "0.8"
-                },
-                {
-                  "value": 9,
-                  "label": "0.9"
-                },
-                {
-                  "value": 10,
-                  "label": "1.0"
-                },
-                {
-                  "value": 11,
-                  "label": "1.1"
-                },
-                {
-                  "value": 12,
-                  "label": "1.2"
-                },
-                {
-                  "value": 13,
-                  "label": "1.3"
-                },
-                {
-                  "value": 14,
-                  "label": "1.4"
-                },
-                {
-                  "value": 15,
-                  "label": "1.5"
-                }
-              ],
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotNudgeOffset",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotNudgeHoldSeconds",
-              "widget": "option",
-              "title": "Maximum Nudge Hold Time",
-              "description": "Maximum time to retain a nudge preference. Driver steering, a blinker, inactive lateral control, or expiration ends it sooner.",
-              "options": [
-                {
-                  "value": 5,
-                  "label": "5 seconds"
-                },
-                {
-                  "value": 10,
-                  "label": "10 seconds"
-                },
-                {
-                  "value": 20,
-                  "label": "20 seconds"
-                },
-                {
-                  "value": 30,
-                  "label": "30 seconds"
-                },
-                {
-                  "value": 60,
-                  "label": "1 minute"
-                },
-                {
-                  "value": 120,
-                  "label": "2 minutes"
-                },
-                {
-                  "value": 300,
-                  "label": "5 minutes"
-                },
-                {
-                  "value": 600,
-                  "label": "10 minutes"
-                },
-                {
-                  "value": 900,
-                  "label": "15 minutes"
-                },
-                {
-                  "value": 1800,
-                  "label": "30 minutes"
-                }
-              ],
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotNudgeOffset",
-                  "equals": true
-                }
-              ]
-            },
-            {
-              "key": "RivianPilotNudgeTimerDisplay",
-              "widget": "toggle",
-              "title": "Show Nudge Countdown",
-              "description": "Show a small silent countdown while a manual nudge is active. Safety alerts always take priority.",
-              "visibility": [
-                {
-                  "type": "capability",
-                  "field": "brand",
-                  "equals": "rivian"
-                }
-              ],
-              "enablement": [
-                {
-                  "type": "param",
-                  "key": "RivianPilotNudgeOffset",
-                  "equals": true
                 }
               ]
             }
@@ -1337,75 +1473,6 @@
                       "type": "offroad_only"
                     }
                   ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "id": "lane_change",
-          "title": "Lane Change",
-          "description": "Automatic lane change timing and behavior",
-          "items": [
-            {
-              "key": "AutoLaneChangeTimer",
-              "widget": "option",
-              "title": "Auto Lane Change by Blinker",
-              "description": "Set a timer to delay the auto lane change operation when the blinker is used. No nudge on the steering wheel is required to auto lane change if a timer is set. Default is Nudge.",
-              "details": "Please use caution when using this feature. Only use the blinker when traffic and road conditions permit.",
-              "options": [
-                {
-                  "value": -1,
-                  "label": "Off"
-                },
-                {
-                  "value": 0,
-                  "label": "Nudge"
-                },
-                {
-                  "value": 1,
-                  "label": "Nudgeless"
-                },
-                {
-                  "value": 2,
-                  "label": "0.5 second"
-                },
-                {
-                  "value": 3,
-                  "label": "1 second"
-                },
-                {
-                  "value": 4,
-                  "label": "2 seconds"
-                },
-                {
-                  "value": 5,
-                  "label": "3 seconds"
-                }
-              ]
-            },
-            {
-              "key": "RoadEdgeLaneChangeEnabled",
-              "widget": "toggle",
-              "title": "Block Lane Change: Road Edge Detection",
-              "description": "Blocks lane change when the model sees a road edge on the side you signal."
-            },
-            {
-              "key": "AutoLaneChangeBsmDelay",
-              "widget": "toggle",
-              "title": "Auto Lane Change: Delay with Blind Spot",
-              "description": "Toggle to enable a delay timer for lane changes when blind spot monitoring (BSM) detects a vehicle in your blind spot.",
-              "enablement": [
-                {
-                  "type": "capability",
-                  "field": "enable_bsm",
-                  "equals": true
-                },
-                {
-                  "type": "param_compare",
-                  "key": "AutoLaneChangeTimer",
-                  "op": ">",
-                  "value": 0
                 }
               ]
             }

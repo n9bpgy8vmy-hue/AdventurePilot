@@ -276,3 +276,17 @@ def test_invalid_config_error_is_always_logged_once(mocker):
   assert log_event.call_args.args[0] == "rivianpilot feature error"
   assert log_event.call_args.kwargs["feature"] == "mads_reverse_resume"
   assert log_event.call_args.kwargs["errors"] == ["resume_delay_out_of_range"]
+
+
+def test_zero_delay_retains_reverse_resume_gates_without_warning(mocker):
+  mads = make_mads(mocker)
+  mads.rivian_reverse_resume_pending = True
+  mads.rivian_mads_resume_delay = 0
+  mads.validate_rivian_mads_config()
+  assert mads.rivian_last_config_error is None
+  assert not mads.should_silent_lkas_enable(car_state(25, structs.CarState.GearShifter.reverse))
+  assert not mads.should_silent_lkas_enable(car_state(20))
+  assert mads.should_silent_lkas_enable(car_state(21))
+  assert mads.rivian_mads_resume_countdown == 0
+  for second in range(1, 6):
+    assert not mads.events_sp.has(getattr(custom.OnroadEventSP.EventName, f"rivianMadsResumeWarning{second}Sec"))

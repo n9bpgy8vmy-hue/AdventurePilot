@@ -1082,3 +1082,14 @@ def test_expired_nudge_hands_back_without_command_reset(preference, curvature, d
   assert previous == pytest.approx(direction * 3 * 0.0254)
   feature.update(car_state(), True, model(path_y=-previous), controls, now=2.1)
   assert abs(feature.last_output - previous) <= 8 * 0.0254 * 0.2 + 1e-9
+
+
+@pytest.mark.parametrize("probability", [float("nan"), float("inf"), -float("inf"), 1.1])
+@pytest.mark.parametrize("side", [1, 2])
+def test_invalid_lane_confidence_rejects_geometry(probability, side):
+  feature = LanePositionController(params())
+  road_model = model()
+  road_model.laneLineProbs[side] = probability
+  geometry, reason = feature._sample_geometry_if_authoritative(road_model, 60)
+  assert geometry is None
+  assert reason == "lane confidence"
