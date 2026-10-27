@@ -1,7 +1,4 @@
-import time
-from openpilot.sunnypilot.rivianpilot.lane_change_guard import LaneChangeGeometryGuard
 from cereal import log, custom
-from openpilot.common.params import Params
 from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeController, AutoLaneChangeMode
@@ -42,9 +39,8 @@ TURN_DESIRES = {
 }
 
 
-
 class DesireHelper:
-  def __init__(self, require_lane_change_geometry=False, lane_change_guard_mode=None):
+  def __init__(self):
     self.lane_change_state = LaneChangeState.off
     self.lane_change_direction = LaneChangeDirection.none
     self.lane_change_timer = 0.0
@@ -55,46 +51,17 @@ class DesireHelper:
     self.alc = AutoLaneChangeController(self)
     self.lane_turn_controller = LaneTurnController(self)
     self.lane_turn_direction = TurnDirection.none
-    # Read once at startup: switching modes must never change an active maneuver.
-    if require_lane_change_geometry and lane_change_guard_mode is None:
-      lane_change_guard_mode = Params().get("RivianPilotLaneChangeGuardMode", return_default=True)
-    self.lane_change_guard_mode = (lane_change_guard_mode if lane_change_guard_mode in (0, 1, 2) else 1) if require_lane_change_geometry else 0
-    self.geometry_guard = LaneChangeGeometryGuard() if self.lane_change_guard_mode else None
-    self.lane_change_guard_reason = ""
-    self.lane_change_guard_direction = 0
-    self._guard_latched_reason = ""
-    self._guard_previous_direction = 0
 
   @staticmethod
   def get_lane_change_direction(CS):
     return LaneChangeDirection.left if CS.leftBlinker else LaneChangeDirection.right
 
-  def update(self, carstate, lateral_active, lane_change_prob, model=None, model_valid=False, now=None):
+  def update(self, carstate, lateral_active, lane_change_prob, left_edge_detected=False, right_edge_detected=False):
     self.alc.update_params()
     self.lane_turn_controller.update_params()
     v_ego = carstate.vEgo
     one_blinker = carstate.leftBlinker != carstate.rightBlinker
     below_lane_change_speed = v_ego < LANE_CHANGE_SPEED_MIN
-
-    self.lane_change_guard_reason = ""
-    self.lane_change_guard_direction = 0
-    if self.geometry_guard is not None:
-      reasons = self.geometry_guard.update(model, v_ego, time.monotonic() if now is None else now, model_valid)
-      direction = (-1 if carstate.leftBlinker else 1) if one_blinker else 0
-      if not lateral_active or direction != self._guard_previous_direction or not direction:
-        self._guard_latched_reason = ""
-        if self.lane_change_guard_mode == 2:
-          self.alc.lane_change_wait_timer = 0.0
-          self.alc.auto_lane_change_allowed = False
-      self._guard_previous_direction = direction
-      # Never abort or steer back once a maneuver is underway. The guard only
-      # decides whether assisted initiation (timer OR torque nudge) is allowed.
-      if lateral_active and direction and not below_lane_change_speed and self.lane_change_state in (
-          LaneChangeState.off, LaneChangeState.preLaneChange):
-        if reasons[direction] and not self._guard_latched_reason:
-          self._guard_latched_reason = reasons[direction]
-        self.lane_change_guard_reason = self._guard_latched_reason
-        self.lane_change_guard_direction = direction
 
     # Lane turn controller update
     self.lane_turn_controller.update_lane_turn(blindspot_left=carstate.leftBlindspot, blindspot_right=carstate.rightBlindspot,
@@ -124,12 +91,15 @@ class DesireHelper:
         blindspot_detected = ((carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or
                               (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
 
-        self.alc.update_lane_change(blindspot_detected, carstate.brakePressed)
+        edge_detected = ((left_edge_detected and self.lane_change_direction == LaneChangeDirection.left) or
+                         (right_edge_detected and self.lane_change_direction == LaneChangeDirection.right))
+
+        self.alc.update_lane_change(blindspot_detected, edge_detected, carstate.brakePressed, torque_applied)
 
         if not one_blinker or below_lane_change_speed:
           self.lane_change_state = LaneChangeState.off
           self.lane_change_direction = LaneChangeDirection.none
-        elif (torque_applied or self.alc.auto_lane_change_allowed) and not blindspot_detected and not (self.lane_change_guard_mode == 2 and self.lane_change_guard_reason):
+        elif (torque_applied or self.alc.auto_lane_change_allowed) and not self.alc.lane_change_blocked:
           self.lane_change_state = LaneChangeState.laneChangeStarting
 
       # LaneChangeState.laneChangeStarting

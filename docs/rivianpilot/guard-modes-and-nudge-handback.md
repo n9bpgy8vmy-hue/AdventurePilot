@@ -1,3 +1,5 @@
+> Superseded for lane changes: this integration branch removes the custom guard and modes. See upstream-road-edge-import.md. The nudge handback changes remain.
+
 # Guard modes and smoother nudge handback — local prototype
 
 The lane geometry guard now has a persistent RivianPilotLaneChangeGuardMode setting: 0 Off, 1 Observe Only (default), 2 Enforce. Sunnylink permits changes only offroad. The mode is read when modeld starts, so restart while parked to apply it. No rebuild is needed to switch modes after this implementation is installed. Off disables geometry evaluation; Observe retains baseline lane-change initiation and emits diagnostic reasons; Enforce gates both timer and torque-assisted initiation. Existing manual control and blind-spot checks are unchanged. Invalid configured modes fall back to observation. This prototype has no solid/dashed detector and no side-vehicle detection.
