@@ -384,6 +384,7 @@ struct OnroadEventSP @0xda96579883444c35 {
     rivianPilotVisionBSMReady @38;
     rivianPilotNudgeTimer @39;
     rivianPilotActiveOffset @40;
+    laneChangeRoadEdge @41;
   }
 }
 
@@ -490,6 +491,8 @@ struct LiveMapDataSP @0xf416ec09499d9d19 {
 
 struct ModelDataV2SP @0xa1680744031fdb2d {
   laneTurnDirection @0 :TurnDirection;
+  leftLaneChangeEdgeBlock @1 :Bool;
+  rightLaneChangeEdgeBlock @2 :Bool;
 
   enum TurnDirection {
     none @0;

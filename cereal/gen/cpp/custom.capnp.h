@@ -232,6 +232,7 @@ enum class EventName_b8007ed8a646b5e6: uint16_t {
   RIVIAN_PILOT_VISION_B_S_M_READY,
   RIVIAN_PILOT_NUDGE_TIMER,
   RIVIAN_PILOT_ACTIVE_OFFSET,
+  LANE_CHANGE_ROAD_EDGE,
 };
 CAPNP_DECLARE_ENUM(EventName, b8007ed8a646b5e6);
 CAPNP_DECLARE_SCHEMA(80ae746ee2596b11);
@@ -4597,6 +4598,10 @@ public:
 
   inline  ::cereal::ModelDataV2SP::TurnDirection getLaneTurnDirection() const;
 
+  inline bool getLeftLaneChangeEdgeBlock() const;
+
+  inline bool getRightLaneChangeEdgeBlock() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -4627,6 +4632,12 @@ public:
 
   inline  ::cereal::ModelDataV2SP::TurnDirection getLaneTurnDirection();
   inline void setLaneTurnDirection( ::cereal::ModelDataV2SP::TurnDirection value);
+
+  inline bool getLeftLaneChangeEdgeBlock();
+  inline void setLeftLaneChangeEdgeBlock(bool value);
+
+  inline bool getRightLaneChangeEdgeBlock();
+  inline void setRightLaneChangeEdgeBlock(bool value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -8971,6 +8982,34 @@ inline  ::cereal::ModelDataV2SP::TurnDirection ModelDataV2SP::Builder::getLaneTu
 inline void ModelDataV2SP::Builder::setLaneTurnDirection( ::cereal::ModelDataV2SP::TurnDirection value) {
   _builder.setDataField< ::cereal::ModelDataV2SP::TurnDirection>(
       ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool ModelDataV2SP::Reader::getLeftLaneChangeEdgeBlock() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS);
+}
+
+inline bool ModelDataV2SP::Builder::getLeftLaneChangeEdgeBlock() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS);
+}
+inline void ModelDataV2SP::Builder::setLeftLaneChangeEdgeBlock(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool ModelDataV2SP::Reader::getRightLaneChangeEdgeBlock() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS);
+}
+
+inline bool ModelDataV2SP::Builder::getRightLaneChangeEdgeBlock() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS);
+}
+inline void ModelDataV2SP::Builder::setRightLaneChangeEdgeBlock(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS, value);
 }
 
 }  // namespace

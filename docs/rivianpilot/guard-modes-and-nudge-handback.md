@@ -1,0 +1,13 @@
+> Superseded for lane changes: this integration branch removes the custom guard and modes. See upstream-road-edge-import.md. The nudge handback changes remain.
+
+# Guard modes and smoother nudge handback — local prototype
+
+The lane geometry guard now has a persistent RivianPilotLaneChangeGuardMode setting: 0 Off, 1 Observe Only (default), 2 Enforce. Sunnylink permits changes only offroad. The mode is read when modeld starts, so restart while parked to apply it. No rebuild is needed to switch modes after this implementation is installed. Off disables geometry evaluation; Observe retains baseline lane-change initiation and emits diagnostic reasons; Enforce gates both timer and torque-assisted initiation. Existing manual control and blind-spot checks are unchanged. Invalid configured modes fall back to observation. This prototype has no solid/dashed detector and no side-vehicle detection.
+
+Both model pipelines publish the active mode with per-frame diagnostic status. Observation warnings explicitly say “Observe: Would Block”. Nothing aborts a maneuver already in progress. Observation does not prove safe behavior; validate before selecting Enforce.
+
+Timed manual nudge expiration previously reset the offset command from three inches to zero in one update for every alignment preference. Automatic handback now starts from the last published offset and proceeds through the existing geometry approval and rate limiter. Curve entry also preserves the command instead of resetting it. Driver-override cancellation and the existing stop-hold logic are unchanged. Camera offset commands are not measured vehicle displacement; these tests do not prove that road oscillation is eliminated.
+
+Validation: 91 lane-position tests and 57 guard tests passed using the existing Python 3.12 environment and a substituted common.params module (the native params_pyx extension is unavailable in this worktree). These execute actual controller code and real cereal schemas, but do not validate persistent Params I/O. 17 settings compiler tests passed, generated output matches, and git diff --check passes. New handback regressions cover both nudge directions, all four preferences, and straight/left/right curve conditions; all 12 initial left-nudge cases failed before the fix. Native build, route replay, UI rendering and device validation remain outstanding. No push or deployment performed.
+
+These edits are in the Mac lane-guard worktree. The prior Sunnylink simplification and zero-delay changes were prepared in a separate Linux checkout; integrate those commits before preparing a release rather than assuming this worktree includes them.

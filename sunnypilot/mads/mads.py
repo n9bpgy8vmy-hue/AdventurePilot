@@ -99,7 +99,7 @@ class ModularAssistiveDrivingSystem:
     errors = []
     if not 5 <= self.rivian_mads_auto_resume_speed <= 45:
       errors.append("resume_speed_out_of_range")
-    if not 1 <= self.rivian_mads_resume_delay <= 5:
+    if not 0 <= self.rivian_mads_resume_delay <= 5:
       errors.append("resume_delay_out_of_range")
 
     error_signature = tuple(errors) or None
@@ -235,6 +235,11 @@ class ModularAssistiveDrivingSystem:
       if CS.vEgo <= self.rivian_mads_auto_resume_speed * speed_factor:
         self.reset_rivian_mads_countdown(CS, "below_resume_speed")
         return False
+
+      if self.rivian_mads_resume_delay == 0:
+        self.reset_rivian_mads_countdown(CS, "immediate_resume")
+        self.log_rivian_mads_resume("resumed", CS, elapsed_control_seconds=0.0, expected_delay_seconds=0)
+        return True
 
       if self.rivian_mads_resume_countdown <= 0.0:
         delay = max(1, min(5, int(self.rivian_mads_resume_delay)))

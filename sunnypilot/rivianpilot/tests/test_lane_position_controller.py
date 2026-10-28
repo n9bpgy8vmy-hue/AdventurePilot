@@ -1065,3 +1065,31 @@ def test_changing_preference_at_stop_clears_old_center_target():
   cs.steeringPressed = True
   feature.update(cs, True, model(), SimpleNamespace(desiredCurvature=0), now=14)
   assert feature.last_output == 0
+
+
+@pytest.mark.parametrize("preference", [0, 1, 2, 3])
+@pytest.mark.parametrize("curvature", [0.0, 0.002, -0.002])
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_expired_nudge_hands_back_without_command_reset(preference, curvature, direction):
+  feature = LanePositionController(params({"RivianPilotLanePositionPreference": preference}))
+  feature.nudge_direction = direction
+  feature.nudge_magnitude_inches = 3
+  feature.nudge_started_at = 1.0
+  feature.nudge_until = 2.0
+  controls = SimpleNamespace(desiredCurvature=curvature)
+  feature.update(car_state(), True, model(), controls, now=1.9)
+  previous = feature.last_output
+  assert previous == pytest.approx(direction * 3 * 0.0254)
+  feature.update(car_state(), True, model(path_y=-previous), controls, now=2.1)
+  assert abs(feature.last_output - previous) <= 8 * 0.0254 * 0.2 + 1e-9
+
+
+@pytest.mark.parametrize("probability", [float("nan"), float("inf"), -float("inf"), 1.1])
+@pytest.mark.parametrize("side", [1, 2])
+def test_invalid_lane_confidence_rejects_geometry(probability, side):
+  feature = LanePositionController(params())
+  road_model = model()
+  road_model.laneLineProbs[side] = probability
+  geometry, reason = feature._sample_geometry_if_authoritative(road_model, 60)
+  assert geometry is None
+  assert reason == "lane confidence"

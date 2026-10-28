@@ -348,6 +348,9 @@ class SelfdriveD(CruiseHelper):
       if (CS.leftBlindspot and direction == LaneChangeDirection.left) or \
          (CS.rightBlindspot and direction == LaneChangeDirection.right):
         self.events.add(EventName.laneChangeBlocked)
+      elif ((self.sm["modelDataV2SP"].leftLaneChangeEdgeBlock and direction == LaneChangeDirection.left) or
+            (self.sm["modelDataV2SP"].rightLaneChangeEdgeBlock and direction == LaneChangeDirection.right)):
+        self.events_sp.add(EventNameSP.laneChangeRoadEdge)
       else:
         if direction == LaneChangeDirection.left:
           self.events.add(EventName.preLaneChangeLeft)
@@ -610,7 +613,7 @@ class SelfdriveD(CruiseHelper):
     clear_event_types = set()
     if ET.WARNING not in self.state_machine.current_alert_types:
       clear_event_types.add(ET.WARNING)
-    if self.enabled:
+    if self.enabled or (ET.NO_ENTRY not in (c := self.state_machine.current_alert_types) and (ET.ENABLE in c or ET.USER_DISABLE in c)):
       clear_event_types.add(ET.NO_ENTRY)
 
     pers = LONGITUDINAL_PERSONALITY_MAP[self.personality]

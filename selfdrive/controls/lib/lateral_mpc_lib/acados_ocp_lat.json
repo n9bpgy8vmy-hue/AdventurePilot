@@ -1,6 +1,6 @@
 {
-    "acados_include_path": "/data/github/venv/lib/python3.12/site-packages/acados/install/include",
-    "acados_lib_path": "/data/github/venv/lib/python3.12/site-packages/acados/install/lib",
+    "acados_include_path": "/data/rivianpilot-build-044.mz0OxS/venv/lib/python3.12/site-packages/acados/install/include",
+    "acados_lib_path": "/data/rivianpilot-build-044.mz0OxS/venv/lib/python3.12/site-packages/acados/install/lib",
     "code_export_directory": "/data/openpilot/selfdrive/controls/lib/lateral_mpc_lib/c_generated_code",
     "constraints": {
         "C": [],
@@ -224,7 +224,7 @@
         "zu_e": []
     },
     "cython_include_dirs": [
-        "/data/github/venv/lib/python3.12/site-packages/numpy/_core/include",
+        "/data/rivianpilot-build-044.mz0OxS/venv/lib/python3.12/site-packages/numpy/_core/include",
         "/usr/include/python3.12"
     ],
     "dims": {

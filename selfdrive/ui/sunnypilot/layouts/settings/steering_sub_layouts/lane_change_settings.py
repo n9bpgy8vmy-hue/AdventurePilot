@@ -52,10 +52,18 @@ class LaneChangeSettingsLayout(Widget):
                              "(BSM) detects a obstructing vehicle, ensuring safe maneuvering."),
     )
 
+    self._road_edge_block = toggle_item_sp(
+      param="RoadEdgeLaneChangeEnabled",
+      title=lambda: tr("Block Lane Change: Road Edge Detection"),
+      description=lambda: tr("Blocks the lane change if the model sees a road edge on your signaled side."),
+    )
+
     items = [
       self._lane_change_timer,
       LineSeparatorSP(40),
       self._bsm_delay,
+      LineSeparatorSP(40),
+      self._road_edge_block,
     ]
 
     return items
